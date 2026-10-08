@@ -1,0 +1,157 @@
+# Dual-chamber pacemaker. All the parts share one simulated patient
+# (rp2350-model's `shared_heart`), which sits at the root of the device tree,
+# beside /MEM rather than on it: /patient/heart, /patient/body and the
+# clinician's /patient/magnet. The board's off-chip parts below that are on
+# no bus -- the pacing switches, the Hall switch and the cell -- appear under
+# /board; the SPI parts stay under their controllers. See ROADMAP.md for the
+# full board wiring.
+
+# SPI0 (SCK=GP18, MOSI=GP19, MISO=GP16) is shared by two parts, each on its
+# own plain-GPIO chip-select.
+#
+# TI ADS1292R sensing front end. DRDY is the part's active-low data-ready
+# output, driven back into GP20. CH1 = ventricular lead, CH2 = atrial lead.
+#
+# Analog Devices ADXL362 accelerometer, the rate-response activity sensor. It
+# feels the patient /patient/body simulates (`set_activity`, `set_posture`).
+# INT1 (GP27) is programmed as the FIFO watermark.
+/MEM/spi0:
+  - name: ads1292r
+    native: ads1292r
+    cs_pin: 17
+    busy_pin: 20
+  - name: adxl362
+    native: adxl362
+    cs_pin: 22
+    busy_pin: 27
+
+# Microchip MCP4822 dual DAC on SPI1 (SCK=GP10, MOSI=GP11), LDAC tied low.
+# VOUTA charges the ventricular output capacitor, VOUTB the atrial one.
+#
+# TI RF430CL330H dynamic NFC tag beside it (MISO=GP12), the telemetry head.
+# INTO (GP3) is driven active low. A clinic programmer's wand reads and
+# writes it: `emctl action /patient/wand place_wand` holds the wand over the
+# implant -- its magnet and its reader -- and the programmer then talks on the
+# `wand` broker (programmer/pacemaker_programmer.py does both).
+# `remove_wand` lifts it, which ends the session.
+#
+# Microsemi ZL70102 implant radio (the MICS-band transceiver with the 2.45 GHz
+# wake-up receiver wandless "ZIP" telemetry uses), third part on SPI1: CS GP5,
+# IRQ GP6 (the PL022 target "busy" line, active high), WU_EN GP7 (below, under
+# /MEM/sio). Its VSUP comes from the cell through a load switch whose ON pin is
+# GP25 (below), so it is unpowered until firmware drives GP25 high, and again
+# whenever the MCU is in reset. The air side is the bedside communicator,
+# `/patient/communicator`, with the host byte broker `communicator`. The
+# register map is the model's own (the ZL70102 Design Manual is not public):
+# see crates/emerson-collections/zl70102.
+/MEM/spi1:
+  - name: mcp4822
+    native: mcp4822
+    cs_pin: 13
+    # The output stage amplifies the DAC 1.25x so the capacitor can reach
+    # Safety Mode's 5.0 V (BSC ACCOLADE physician letter, Sept 2025, Appendix A /
+    # Table 3): capacitor volts = 1.25 mV x code at GA = 0 (4000 = 5.000 V).
+    # The firmware converts every programmed mV to a code (dac_code_for_mv).
+    output_gain: 1.25
+  - name: rf430cl330h
+    native: rf430cl330h
+    cs_pin: 2
+    busy_pin: 3
+  - name: radio
+    native: zl70102
+    cs_pin: 5
+    busy_pin: 6
+
+# TI TS5A3166 SPST switches between each output capacitor and its lead:
+# ventricular IN on GP14, atrial IN on GP15. Firmware holds IN high for the
+# pulse width.
+/MEM/sio:
+  - name: vpace
+    native: ts5a3166
+    chamber: ventricle
+    pins:
+      in: 14
+  - name: apace
+    native: ts5a3166
+    chamber: atrium
+    pins:
+      in: 15
+
+# TI TS5A3159 SPDT switch (SCDS174D): the ventricular lead's polarity. COM is
+# the sense amplifier's and the pacing output's return; NC is the lead's ring,
+# NO is the can. IN (GP28) low = ring = bipolar, high = can = unipolar. Firmware
+# that never touches GP28 stays bipolar. /board/polarity.
+  - name: polarity
+    native: ts5a3159
+    chamber: ventricle
+    pins:
+      in: 28
+
+# TI TPS22860 ultra-low-leakage load switch (SLVSD04) between the cell and the
+# ZL70102's VSUP: ON on GP25, pulled down on the board, so the radio is off in
+# reset. tON/tOFF are nanoseconds; the switch itself draws 10-12 nA from the
+# cell. /board/radio_vsup.
+  - name: radio_vsup
+    native: tps22860
+    pins:
+      on: 25
+
+# The GPIO wire to the ZL70102's WU_EN pin: GP7. A pulse under 1.5 ms strobes
+# the 2.45 GHz wake-up receiver, a longer one starts the core (DS "Startup
+# Method Using IMD Pin Control"). /board/radio_wu_en.
+  - name: radio_wu_en
+    native: zl70102_wu_en
+    pins:
+      wu_en: 7
+
+# TI DRV5032FA omnipolar Hall switch (push-pull OUT -> GP21, low with a
+# magnet over it): the clinician's magnet forces asynchronous pacing. The
+# part is /board/magnet_sensor; the magnet is /patient/magnet.
+  - name: magnet_sensor
+    native: drv5032
+    pins:
+      out: 21
+
+# The implant's lithium/carbon-monofluoride primary cell (the ACCOLADE's
+# chemistry: BSC spec sheet "lithium-carbon monofluoride cell"; 1.6 Ah, 47 uF
+# on the rail; crates/emerson-collections/implant_cell), VBAT straight to GP26
+# (ADC0). It powers the pacing output stage, so every pace drains it, and
+# firmware watches its loaded voltage for ERI (2.55 V) and EOL (2.30 V). A
+# real cell lasts about 14 years: at x1e6 aging one guest second is 11.6 days,
+# and the cell reaches ERI about seven guest minutes in. The cell is
+# /board/battery (`emctl action /board/battery set_depletion 97` skips most of
+# the way; `set_defect 1` adds the ACCOLADE high-impedance defect, and
+# `set_draw radio 6000` loads the rail with 6 mA); /MEM/adc/battery is only
+# the ADC channel reading it. Other `chemistry:` values: li_mno2, and
+# li_iodine (the default when the key is absent, the original 2.8 V Li/I2).
+/MEM/adc:
+  - name: battery
+    channel: 0
+    native: implant_cell
+    chemistry: li_cfx
+    aging_factor: 1.0e+6
+
+# Microchip AT24C256C 32 KB serial EEPROM on I2C0 (SDA GP8, SCL GP9), A2-A0
+# strapped low: the diagnostic store. Counters, histograms, the episode log,
+# trends and stored EGMs are checkpointed here, so they survive a reset, and
+# the console's `telemetry` session reads them back
+# (programmer/pacemaker_programmer.py). `emctl action /MEM/i2c0/at24c256 dump
+# 0` shows the raw store; it starts with the "PMDS" magic.
+/MEM/i2c0:
+  - name: at24c256
+    address: 0x50
+    native: at24c256
+
+# TI TPS3839G25 supply supervisor on the RUN pin: RESET (push-pull, active
+# low) goes low when the implant's rail falls below 2.325 V (+23 mV
+# hysteresis) and stays low for 200 ms after it recovers, holding the chip in
+# reset (POWMAN.CHIP_RESET.HAD_RUN_LOW). It is /board/supervisor.
+#
+# It watches the implant cell's instantaneous rail (`board_supply_rail`).
+# The RP2350's own regulator needs VREG_VIN >= 2.7 V, above a Li/CFx cell's
+# plateau, so this board feeds DVDD from an external low-Iq regulator and
+# runs IOVDD straight off the cell (>= 1.62 V); neither is modelled.
+/MEM/run:
+  - name: supervisor
+    native: tps3839
+    variant: G25

@@ -1,0 +1,458 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1490 1508" width="1490" height="1508" role="img" aria-labelledby="t d">
+<title id="t">RP2350 pacemaker: board and patient wiring</title>
+<desc id="d">Schematic, updated with the ZL70102 radio, TPS22860 load switch, TPS3839 supervisor and TS5A3159 polarity switch: the RP2350 pacemaker controller connects to an ADXL362 activity sensor and an ADS1292R heart-sensing front end on a shared SPI0 bus, an MCP4822 pacing amplitude DAC and an RF430CL330H NFC telemetry tag on a shared SPI1 bus, a DRV5032 magnet sensor, two TS5A3166 pacing switches, an AT24C256C diagnostic EEPROM on I2C0, a lithium-iodine battery on ADC0, and a host on two UARTs. The ADS1292R inputs and the pacing switch outputs both land on the tip and ring conductors of the RA and RV leads, which run to the simulated heart. The accelerometer, the Hall switch and the NFC tag couple to the patient's body, the clinician's magnet and the programmer's wand without wires.</desc>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans+Condensed:wght@500;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;display=swap');
+svg {
+  --paper: #0f1416; --sheet: #141b1e; --box: #1a2327; --ink: #d5dee1; --muted: #8b999e; --rule: #253034;
+  --pace: #f27a4e; --sense: #3cc2b5; --pwr: #e1b24c; --coup: #a68cf2;
+  --ptint: #1d1918; --chamber: #43271f;
+  --f-disp: "IBM Plex Sans Condensed", "Arial Narrow", sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color: var(--ink);
+  color-scheme: dark;
+}
+/* SVG */
+svg text { font-family: var(--f-mono); font-size: 10.5px; fill: var(--ink); }
+svg .tb { font-family: var(--f-body); font-weight: 600; font-size: 13.5px; }
+svg .tp { font-family: var(--f-body); font-weight: 600; font-size: 12px; }
+svg .ts { font-family: var(--f-body); font-size: 10.5px; }
+svg .tm { fill: var(--muted); font-size: 10px; }
+svg .zl { font-family: var(--f-disp); font-weight: 600; font-size: 13px; letter-spacing: .1em; }
+svg .lp { fill: var(--pace); } svg .ls { fill: var(--sense); } svg .lw { fill: var(--pwr); } svg .lc { fill: var(--coup); }
+.sheetbg { fill: var(--sheet); }
+.gridl { fill: none; stroke: var(--rule); stroke-width: .6; }
+.box { fill: var(--box); stroke: var(--ink); stroke-width: 1.4; }
+.zone { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 6 4; }
+.zone-pt { fill: var(--ptint); stroke: var(--pace); stroke-width: 1; stroke-dasharray: 6 4; }
+.zone-os { fill: none; stroke: var(--pace); stroke-width: .8; stroke-dasharray: 3 3; opacity: .7; }
+.w { fill: none; stroke: var(--ink); stroke-width: 1.3; }
+.bus { fill: none; stroke: var(--ink); stroke-width: 4; }
+.pace { fill: none; stroke: var(--pace); stroke-width: 2; }
+.sense { fill: none; stroke: var(--sense); stroke-width: 1.5; }
+.pwr { fill: none; stroke: var(--pwr); stroke-width: 1.7; }
+.coup { fill: none; stroke: var(--coup); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.coil { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+.cable { fill: none; stroke: var(--sense); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+.gap { fill: none; stroke: var(--ptint); stroke-width: 16; }
+.chamber { fill: var(--chamber); stroke: var(--ink); stroke-width: 1.2; }
+.dot { fill: var(--ink); } .dot-p { fill: var(--pace); } .dot-s { fill: var(--sense); } .dot-w { fill: var(--pwr); }
+.pin { fill: var(--box); stroke: var(--ink); stroke-width: 1.2; }
+.m-ink { fill: var(--ink); } .m-coup { fill: var(--coup); } .m-pwr { fill: var(--pwr); }
+.mag-n { fill: var(--pace); } .mag-s { fill: var(--muted); }
+svg .on-mag { fill: var(--box); font-weight: 500; }
+
+.cap { font-family: var(--f-body); font-size: 12.5px; fill: var(--muted); }
+.tbk { font-family: var(--f-mono); font-weight: 500; font-size: 9.5px; letter-spacing: .08em; fill: var(--muted); }
+.tbv { font-family: var(--f-mono); font-weight: 500; font-size: 12.5px; fill: var(--ink); }
+.frame { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.cell { fill: none; stroke: var(--rule); stroke-width: 1; }
+</style>
+<rect class="sheetbg" x="0" y="0" width="1490" height="1508"/>
+
+  <defs>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path class="gridl" d="M20,0 H0 V20"/></pattern>
+    <marker id="ah" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="m-ink" d="M0,0 L8,4 L0,8 z"/></marker>
+    <marker id="ahc" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path class="m-coup" d="M0,0 L8,4 L0,8 z"/></marker>
+    <marker id="ahw" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="m-pwr" d="M0,0 L8,4 L0,8 z"/></marker>
+    <g id="gnd" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M0,0 V2 M-8,2 H8 M-5,6 H5 M-2,10 H2"/></g>
+  </defs>
+
+  <rect class="sheetbg" x="0" y="0" width="1490" height="1330"/>
+  <rect x="0" y="0" width="1490" height="1330" fill="url(#grid)"/>
+
+  <!-- zones -->
+  <rect class="zone" x="156" y="36" width="1068" height="1278" rx="6"/>
+  <text class="zl" x="172" y="60">IMPLANT BOARD</text>
+  <text class="tm" x="172" y="76">Pico 2 + off-chip parts · /MEM, /board</text>
+  <rect class="zone-pt" x="1240" y="36" width="234" height="1278" rx="6"/>
+  <text class="zl lp" x="1252" y="60">PATIENT</text>
+  <text class="tm" x="1252" y="76">/patient · simulated</text>
+
+  <!-- host -->
+  <rect class="box" x="16" y="100" width="124" height="230" rx="3"/>
+  <text class="tb" x="24" y="122">Clinic host</text>
+  <text class="tm" x="24" y="137">programmer, emctl</text>
+  <text x="24" y="166">tty0 console</text>
+  <text x="24" y="206">tty1 telemetry</text>
+  <text x="24" y="246">wand broker</text>
+  <text class="tm" x="24" y="261">→ /patient/wand</text>
+  <text x="24" y="286">communicator</text>
+  <text class="tm" x="24" y="301">→ the radio link</text>
+  <text class="tm" x="24" y="319">emerson library</text>
+
+  <!-- UARTs -->
+  <path class="w" d="M440,150 H141" marker-end="url(#ah)"/>
+  <path class="w" d="M140,175 H439" marker-end="url(#ah)"/>
+  <path class="w" d="M440,215 H141" marker-end="url(#ah)"/>
+  <text class="ts" x="300" y="145" text-anchor="middle">UART0 TX → console text</text>
+  <text class="ts" x="300" y="170" text-anchor="middle">UART0 RX ← typed commands</text>
+  <text class="ts" x="300" y="210" text-anchor="middle">UART1 TX → markers, alarms</text>
+
+  <!-- diagnostic store -->
+  <rect class="box" x="200" y="298" width="170" height="122" rx="3"/>
+  <text class="tb" x="208" y="319">Diagnostic store</text>
+  <text class="tm" x="208" y="335">U8 · AT24C256C</text>
+  <text class="tm" x="208" y="349">32 KB EEPROM, addr 0x50</text>
+  <text x="362" y="369" text-anchor="end">SDA</text>
+  <text x="362" y="394" text-anchor="end">SCL</text>
+  <text class="tm" x="208" y="382">reset log, Safety latch</text>
+  <text class="tm" x="208" y="410">A2–A0, WP → GND</text>
+  <text class="tm" x="200" y="434">/MEM/i2c0/at24c256</text>
+  <path class="w" d="M370,365 H440 M370,390 H440"/>
+  <text class="ts" x="405" y="359" text-anchor="middle">I2C0</text>
+
+  <!-- battery -->
+  <path class="pwr" d="M330,546 V530 H440"/>
+  <path class="w" d="M312,546 H348" stroke-width="2.2"/>
+  <path class="w" d="M320,553 H340"/>
+  <path class="w" d="M312,560 H348" stroke-width="2.2"/>
+  <path class="w" d="M320,567 H340 M330,567 V586"/>
+  <use href="#gnd" xlink:href="#gnd" x="330" y="586"/>
+  <text x="352" y="546">+</text>
+  <text class="tb" x="172" y="550">Battery</text>
+  <text class="tm" x="172" y="566">BT1 · Li/CFx, 1.6 Ah</text>
+  <text class="tm" x="172" y="580">2.60–2.72 V plateau</text>
+  <text class="tm" x="172" y="594">ERI 2.55, EOL 2.30 V</text>
+  <text class="tm" x="172" y="616">/board/battery</text>
+  <text class="lw" x="395" y="523" text-anchor="middle">VBAT</text>
+  <circle class="dot-w" cx="410" cy="530" r="3.2"/>
+  <path class="pwr" d="M410,530 V545"/>
+  <path class="w" d="M398,545 H422 M398,552 H422" stroke-width="2"/>
+  <path class="w" d="M410,552 V560"/>
+  <use href="#gnd" xlink:href="#gnd" x="410" y="560"/>
+  <text class="tm" x="410" y="586" text-anchor="middle">C3 47 µF</text>
+  <circle class="dot-w" cx="375" cy="530" r="3.2"/>
+  <path class="pwr" d="M375,530 V660"/>
+  <rect class="box" x="298" y="660" width="138" height="64" rx="3"/>
+  <text class="tb" x="306" y="680">Pacing rail</text>
+  <text class="tm" x="306" y="696">U9 · ×2 charge pump</text>
+  <text class="lw" x="306" y="713">VRAIL = 2·VBAT</text>
+  <path class="pwr" d="M375,724 V752" marker-end="url(#ahw)"/>
+  <text class="lw" x="375" y="768" text-anchor="middle">VRAIL → A1, A2</text>
+
+  <!-- supply supervisor -->
+  <rect class="box" x="200" y="826" width="170" height="92" rx="3"/>
+  <text class="tb" x="208" y="847">Supply supervisor</text>
+  <text class="tm" x="208" y="863">U14 · TPS3839G25</text>
+  <text class="tm" x="208" y="877">trips at 2.325 V</text>
+  <text class="tm" x="208" y="891">holds RESET 200 ms</text>
+  <text x="208" y="910">VDD</text>
+  <text x="362" y="910" text-anchor="end">/RESET</text>
+  <text class="tm" x="200" y="932">/board/supervisor</text>
+  <path class="pwr" d="M200,906 H180 V888"/>
+  <text class="lw" x="180" y="882" text-anchor="middle">VBAT</text>
+  <path class="w" d="M370,906 H439" marker-end="url(#ah)"/>
+
+  <!-- MCU -->
+  <rect class="box" x="440" y="96" width="160" height="1198" rx="4" stroke-width="1.8"/>
+  <text x="448" y="154">GP0 TX</text>
+  <text x="448" y="179">GP1 RX</text>
+  <text x="448" y="219">GP4 TX</text>
+  <text x="448" y="369">GP8 SDA</text>
+  <text x="448" y="394">GP9 SCL</text>
+  <text x="448" y="534">GP26 ADC0</text>
+  <text x="448" y="910">RUN</text>
+  <text x="592" y="116" text-anchor="end">SCK GP18</text>
+  <text x="592" y="130" text-anchor="end">MOSI GP19</text>
+  <text x="592" y="144" text-anchor="end">MISO GP16</text>
+  <text x="592" y="230" text-anchor="end">GP22</text>
+  <text x="592" y="250" text-anchor="end">GP27</text>
+  <text x="592" y="319" text-anchor="end">GP21</text>
+  <text x="592" y="434" text-anchor="end">GP17</text>
+  <text x="592" y="474" text-anchor="end">GP20</text>
+  <text x="592" y="560" text-anchor="end">SCK GP10</text>
+  <text x="592" y="574" text-anchor="end">MOSI GP11</text>
+  <text x="592" y="588" text-anchor="end">MISO GP12</text>
+  <text x="592" y="640" text-anchor="end">GP13</text>
+  <text x="592" y="819" text-anchor="end">GP15</text>
+  <text x="592" y="844" text-anchor="end">GP14</text>
+  <text x="592" y="990" text-anchor="end">GP2</text>
+  <text x="592" y="1015" text-anchor="end">GP3</text>
+  <text x="592" y="529" text-anchor="end">GP28</text>
+  <text x="592" y="1180" text-anchor="end">GP5</text>
+  <text x="592" y="1205" text-anchor="end">GP6</text>
+  <text x="592" y="1230" text-anchor="end">GP7</text>
+  <text x="592" y="1279" text-anchor="end">GP25</text>
+  <text class="tb" x="520" y="700" text-anchor="middle" style="font-size:15px">Pacemaker</text>
+  <text class="tb" x="520" y="718" text-anchor="middle" style="font-size:15px">controller</text>
+  <text class="tm" x="520" y="738" text-anchor="middle">U1 · RP2350A, Pico 2</text>
+  <text class="tm" x="520" y="752" text-anchor="middle">Hazard3 RV32IMAC</text>
+  <text class="tm" x="520" y="766" text-anchor="middle">12 MHz XTAL, no PLL</text>
+
+  <!-- SPI0 bus -->
+  <path class="w" d="M600,112 H650 M600,126 H650 M600,140 H650"/>
+  <path class="bus" d="M650,110 V392"/>
+  <path class="bus" d="M650,180 H680 M650,390 H680"/>
+  <text class="tm" x="656" y="300">SPI0</text>
+
+  <!-- activity sensor -->
+  <rect class="box" x="680" y="160" width="180" height="100" rx="3"/>
+  <text x="688" y="184">SPI0</text>
+  <text x="688" y="230">/CS</text>
+  <text x="688" y="250">INT1</text>
+  <text class="tb" x="852" y="182" text-anchor="end">Activity sensor</text>
+  <text class="tm" x="852" y="198" text-anchor="end">U3 · ADXL362 3-axis</text>
+  <text class="tm" x="852" y="212" text-anchor="end">±2 g, 25 Hz FIFO, VS 3V0</text>
+  <text class="tm" x="852" y="250" text-anchor="end">INT2 n.c.</text>
+  <text class="tm" x="680" y="274">/MEM/spi0/adxl362</text>
+  <path class="w" d="M600,226 H680"/>
+  <path class="w" d="M680,246 H601" marker-end="url(#ah)"/>
+
+  <!-- magnet sensor -->
+  <rect class="box" x="680" y="290" width="180" height="58" rx="3"/>
+  <text x="688" y="319">OUT</text>
+  <text class="tb" x="852" y="310" text-anchor="end">Magnet sensor</text>
+  <text class="tm" x="852" y="326" text-anchor="end">U4 · DRV5032FA Hall</text>
+  <text class="tm" x="852" y="340" text-anchor="end">omnipolar, BOP 3 mT</text>
+  <text class="tm" x="680" y="362">/board/magnet_sensor</text>
+  <path class="w" d="M680,315 H601" marker-end="url(#ah)"/>
+
+  <!-- heart sensing front end -->
+  <rect class="box" x="680" y="376" width="180" height="114" rx="3"/>
+  <text x="688" y="394">SPI0</text>
+  <text x="688" y="434">/CS</text>
+  <text x="688" y="474">/DRDY</text>
+  <text x="852" y="399" text-anchor="end">IN1P</text>
+  <text x="852" y="419" text-anchor="end">IN1N</text>
+  <text x="852" y="459" text-anchor="end">IN2P</text>
+  <text x="852" y="479" text-anchor="end">IN2N</text>
+  <text class="tb" x="766" y="425" text-anchor="middle">Heart sensing</text>
+  <text class="tm" x="766" y="441" text-anchor="middle">U2 · ADS1292R</text>
+  <text class="tm" x="766" y="455" text-anchor="middle">24-bit, 500 SPS</text>
+  <text class="tm" x="766" y="469" text-anchor="middle">AVDD 3V0</text>
+  <text class="tm" x="680" y="504">/MEM/spi0/ads1292r</text>
+  <path class="w" d="M600,430 H680"/>
+  <path class="w" d="M680,470 H601" marker-end="url(#ah)"/>
+
+  <!-- SPI1 bus -->
+  <path class="w" d="M600,556 H650 M600,570 H650 M600,584 H650"/>
+  <path class="bus" d="M650,554 V1098"/>
+  <path class="bus" d="M650,612 H680 M650,894 H680 M650,1096 H680"/>
+  <text class="tm" x="656" y="760">SPI1</text>
+
+  <!-- pacing amplitude DAC -->
+  <rect class="box" x="680" y="596" width="180" height="134" rx="3"/>
+  <text x="688" y="616">SPI1</text>
+  <text x="688" y="640">/CS</text>
+  <text x="688" y="718">/LDAC</text>
+  <text x="852" y="644" text-anchor="end">VOUTA</text>
+  <text x="852" y="722" text-anchor="end">VOUTB</text>
+  <text class="tb" x="770" y="667" text-anchor="middle">Pacing amplitude</text>
+  <text class="tm" x="770" y="683" text-anchor="middle">U5 · MCP4822</text>
+  <text class="tm" x="770" y="697" text-anchor="middle">dual 12-bit DAC, VDD 5 V</text>
+  <text class="tm" x="680" y="744">/MEM/spi1/mcp4822</text>
+  <path class="w" d="M600,636 H680"/>
+  <path class="w" d="M680,714 H666 V722"/>
+  <use href="#gnd" xlink:href="#gnd" x="666" y="722"/>
+
+  <!-- telemetry head -->
+  <rect class="box" x="680" y="878" width="180" height="150" rx="3"/>
+  <text x="688" y="898">SPI1</text>
+  <text x="688" y="990">/CS</text>
+  <text x="688" y="1015">INTO</text>
+  <text x="852" y="990" text-anchor="end">ANT1</text>
+  <text x="852" y="1015" text-anchor="end">ANT2</text>
+  <text class="tb" x="852" y="899" text-anchor="end">Telemetry head</text>
+  <text class="tm" x="852" y="916" text-anchor="end">U10 · RF430CL330H</text>
+  <text class="tm" x="852" y="930" text-anchor="end">NFC Type 4 tag</text>
+  <text class="tm" x="852" y="944" text-anchor="end">3 KB NDEF SRAM</text>
+  <text class="tm" x="852" y="958" text-anchor="end">SPI mode 0, ≤ 100 kHz</text>
+  <text class="tm" x="680" y="1042">/MEM/spi1/rf430cl330h</text>
+  <path class="w" d="M600,986 H680"/>
+  <path class="w" d="M680,1011 H601" marker-end="url(#ah)"/>
+  <!-- L1 antenna coil -->
+  <path class="w" d="M860,986 H890 M860,1011 H890"/>
+  <path class="coil" d="M890,986 a6.25,6.25 0 0 1 0,12.5 a6.25,6.25 0 0 1 0,12.5"/>
+  <path class="coil" d="M898,982 V1015" stroke-dasharray="2 3"/>
+  <text class="tm" x="906" y="1040">L1 · loop antenna</text>
+
+  <!-- implant radio -->
+  <rect class="box" x="680" y="1080" width="180" height="170" rx="3"/>
+  <text x="688" y="1100">SPI1</text>
+  <text x="688" y="1180">/CS</text>
+  <text x="688" y="1205">IRQ</text>
+  <text x="688" y="1230">WU_EN</text>
+  <text x="852" y="1180" text-anchor="end">ANT</text>
+  <text x="852" y="1224" text-anchor="end">VSUP</text>
+  <text class="tb" x="852" y="1101" text-anchor="end">Implant radio</text>
+  <text class="tm" x="852" y="1117" text-anchor="end">U12 · ZL70102</text>
+  <text class="tm" x="852" y="1131" text-anchor="end">MICS 402–405 MHz</text>
+  <text class="tm" x="852" y="1145" text-anchor="end">2.45 GHz wake-up rx</text>
+  <text class="tm" x="852" y="1159" text-anchor="end">TX 5.3 mA, RX 4.3 mA</text>
+  <text class="tm" x="680" y="1264">/MEM/spi1/radio</text>
+  <path class="w" d="M600,1176 H680"/>
+  <path class="w" d="M680,1201 H601" marker-end="url(#ah)"/>
+  <path class="w" d="M600,1226 H680"/>
+  <!-- antenna -->
+  <path class="w" d="M860,1176 H884 V1156 M876,1156 L884,1146 L892,1156"/>
+
+  <!-- radio load switch -->
+  <rect class="box" x="900" y="1190" width="160" height="60" rx="3"/>
+  <text class="tb" x="1052" y="1209" text-anchor="end">Radio power</text>
+  <text class="tm" x="1052" y="1224" text-anchor="end">U13 · TPS22860</text>
+  <text class="tm" x="1052" y="1237" text-anchor="end">ON pulled down</text>
+  <text x="908" y="1224">VOUT</text>
+  <text class="tm" x="974" y="1264" text-anchor="end">ON</text>
+  <text class="tm" x="988" y="1264">/board/radio_vsup</text>
+  <path class="pwr" d="M900,1220 H861" marker-end="url(#ahw)"/>
+  <path class="pwr" d="M1060,1220 H1084"/>
+  <text class="lw" x="1088" y="1224">VBAT</text>
+  <path class="w" d="M600,1275 H980 V1251" marker-end="url(#ah)"/>
+
+  <!-- pacing output stage -->
+  <rect class="zone-os" x="866" y="576" width="182" height="232" rx="4"/>
+  <text class="tm lp" x="874" y="591">OUTPUT STAGE</text>
+
+  <!-- ventricular row -->
+  <path class="pace" d="M860,640 H885 M913,640 H975"/>
+  <polygon class="box" points="885,626 885,654 913,640"/>
+  <text class="tm" x="899" y="618" text-anchor="middle">A1 ×1.25</text>
+  <circle class="dot-p" cx="945" cy="640" r="3.2"/>
+  <path class="pace" d="M945,640 V653"/>
+  <path class="w" d="M933,653 H957 M933,660 H957" stroke-width="2"/>
+  <path class="w" d="M945,660 V671"/>
+  <use href="#gnd" xlink:href="#gnd" x="945" y="671"/>
+  <text class="tm" x="960" y="665">C1</text>
+  <text class="tp" x="1005" y="604" text-anchor="middle">V pace switch</text>
+  <text class="tm" x="1005" y="616" text-anchor="middle">U6 · TS5A3166</text>
+  <rect class="box" x="975" y="620" width="60" height="40" rx="2"/>
+  <path class="pace" d="M975,640 H984 M1026,640 H1035"/>
+  <circle class="pin" cx="987" cy="640" r="2.6"/><circle class="pin" cx="1023" cy="640" r="2.6"/>
+  <path class="w" d="M989,639 L1019,628"/>
+  <text class="tm" x="1005" y="656" text-anchor="middle">IN</text>
+  <path class="pace" d="M1035,640 H1180"/>
+  <circle class="dot-p" cx="1180" cy="640" r="3.4"/>
+  <text class="lp" x="1072" y="634" text-anchor="middle">VP</text>
+
+  <!-- atrial row -->
+  <path class="pace" d="M860,718 H870 V760 H885 M913,760 H975"/>
+  <polygon class="box" points="885,746 885,774 913,760"/>
+  <text class="tm" x="899" y="740" text-anchor="middle">A2 ×1.25</text>
+  <circle class="dot-p" cx="945" cy="760" r="3.2"/>
+  <path class="pace" d="M945,760 V773"/>
+  <path class="w" d="M933,773 H957 M933,780 H957" stroke-width="2"/>
+  <path class="w" d="M945,780 V791"/>
+  <use href="#gnd" xlink:href="#gnd" x="945" y="791"/>
+  <text class="tm" x="960" y="785">C2</text>
+  <text class="tp" x="1005" y="724" text-anchor="middle">A pace switch</text>
+  <text class="tm" x="1005" y="736" text-anchor="middle">U7 · TS5A3166</text>
+  <rect class="box" x="975" y="740" width="60" height="40" rx="2"/>
+  <path class="pace" d="M975,760 H984 M1026,760 H1035"/>
+  <circle class="pin" cx="987" cy="760" r="2.6"/><circle class="pin" cx="1023" cy="760" r="2.6"/>
+  <path class="w" d="M989,759 L1019,748"/>
+  <text class="tm" x="1005" y="776" text-anchor="middle">IN</text>
+  <path class="pace" d="M1035,760 H1140"/>
+  <circle class="dot-p" cx="1140" cy="760" r="3.4"/>
+  <text class="lp" x="1072" y="754" text-anchor="middle">AP</text>
+  <text class="tm" x="1044" y="826" text-anchor="end">/board/vpace · /board/apace</text>
+
+  <!-- switch control lines -->
+  <path class="w" d="M600,815 H1005 V781" marker-end="url(#ah)"/>
+  <path class="w" d="M600,840 H1115 V675 H1005 V661" marker-end="url(#ah)"/>
+
+  <!-- lead conductors: AFE taps + pacing taps -->
+  <path class="sense" d="M860,395 H1180 V840 H1224"/>
+  <path class="sense" d="M860,415 H1080"/>
+  <path class="sense" d="M1130,407 H1195 V825 H1224"/>
+  <path class="sense" d="M1130,430 H1168 V544"/>
+  <circle class="pin" cx="1168" cy="548" r="4"/>
+  <text class="tm" x="1136" y="552" text-anchor="end" style="fill:var(--sense)">CAN (implant housing)</text>
+  <rect class="box" x="1080" y="400" width="50" height="44" rx="2"/>
+  <circle class="pin" cx="1090" cy="415" r="2.4"/><circle class="pin" cx="1120" cy="407" r="2.4"/><circle class="pin" cx="1120" cy="430" r="2.4"/>
+  <path class="w" d="M1092,414 L1118,408"/>
+  <text class="tm" x="1092" y="438" style="font-size:8px">COM</text>
+  <text class="tp" x="1105" y="361" text-anchor="middle">Lead polarity</text>
+  <text class="tm" x="1105" y="373" text-anchor="middle">U11 · TS5A3159</text>
+  <text class="tm" x="1105" y="385" text-anchor="middle">/board/polarity</text>
+  <path class="w" d="M600,525 H1105 V445" marker-end="url(#ah)"/>
+  <text class="tm" x="1098" y="519" text-anchor="end">GP28 low = ring, bipolar · high = can, unipolar</text>
+  <path class="sense" d="M860,455 H1140 V870 H1224"/>
+  <path class="sense" d="M860,475 H1155 V855 H1224"/>
+  <text class="ls" x="866" y="389">CH1 · RV lead, tip − return</text>
+  <text class="ls" x="866" y="449">CH2 · RA lead, tip − ring</text>
+  <text class="ls tm" x="1176" y="388" text-anchor="end" style="fill:var(--sense)">tip</text>
+  <text class="ls tm" x="1212" y="402" text-anchor="end" style="fill:var(--sense)">ring</text>
+
+  <!-- J1 lead header -->
+  <circle class="pin" cx="1224" cy="825" r="3"/><circle class="pin" cx="1224" cy="840" r="3"/>
+  <circle class="pin" cx="1224" cy="855" r="3"/><circle class="pin" cx="1224" cy="870" r="3"/>
+  <text class="tm" x="1216" y="892" text-anchor="end">J1 · IS-1 lead header</text>
+
+  <!-- patient: body -->
+  <rect class="box" x="1252" y="150" width="190" height="106" rx="3"/>
+  <text class="tb" x="1262" y="170">Body</text>
+  <text class="tm" x="1262" y="186">/patient/body</text>
+  <text class="ts" x="1262" y="205">activity in METs</text>
+  <text class="ts" x="1262" y="220">posture → gravity</text>
+  <text class="ts" x="1262" y="235">raises the sinus rate</text>
+  <text class="ts" x="1262" y="250">arm effort → myopotentials</text>
+  <path class="coup" d="M1252,200 H862" marker-end="url(#ahc)"/>
+  <text class="lc" x="1056" y="193" text-anchor="middle">body motion + gravity, in g</text>
+
+  <!-- patient: magnet -->
+  <text class="tb" x="1262" y="282">Clinician's magnet</text>
+  <rect class="mag-n" x="1290" y="290" width="40" height="24"/>
+  <rect class="mag-s" x="1330" y="290" width="40" height="24"/>
+  <text class="on-mag" x="1310" y="306" text-anchor="middle">N</text>
+  <text class="on-mag" x="1350" y="306" text-anchor="middle">S</text>
+  <text class="tm" x="1262" y="332">/patient/magnet</text>
+  <text class="ts" x="1262" y="348">held over the chest</text>
+  <path class="coup" d="M1290,302 H862" marker-end="url(#ahc)"/>
+  <text class="lc" x="1076" y="295" text-anchor="middle">field ≥ 3 mT → OUT low</text>
+
+  <!-- patient: heart -->
+  <text class="tb" x="1252" y="572">Heart</text>
+  <text class="tm" x="1252" y="588">/patient/heart</text>
+  <rect class="chamber" x="1300" y="600" width="100" height="80" rx="14"/>
+  <rect class="chamber" x="1300" y="770" width="100" height="90" rx="14"/>
+  <circle class="dot" cx="1312" cy="613" r="4"/>
+  <text class="ts" x="1320" y="617">SA node</text>
+  <text class="tb" x="1392" y="672" text-anchor="end">RA</text>
+  <text class="ts" x="1308" y="792">escape 35 bpm</text>
+  <text class="tb" x="1392" y="852" text-anchor="end">RV</text>
+  <path class="w" d="M1350,680 V768" marker-end="url(#ah)"/>
+  <text class="ts" x="1358" y="720">AV node</text>
+  <text class="ts tm" x="1358" y="734">PR 160 ms</text>
+
+  <!-- leads into the heart -->
+  <path class="sense" d="M1224,825 L1244,832 M1224,840 L1244,832 M1224,855 L1244,862 M1224,870 L1244,862"/>
+  <path class="cable" d="M1244,832 H1330"/>
+  <path class="gap" d="M1262,850 V814"/>
+  <path class="cable" d="M1244,862 H1262 V640 H1330"/>
+  <path class="w" d="M1316,824 V840 M1316,632 V648" stroke-width="3"/>
+  <circle class="dot" cx="1332" cy="832" r="5"/>
+  <circle class="dot" cx="1332" cy="640" r="5"/>
+  <text class="ts tm" x="1340" y="644">tip</text>
+  <text class="ts tm" x="1340" y="836">tip</text>
+
+  <!-- patient: bedside communicator -->
+  <rect class="box" x="1252" y="1120" width="210" height="104" rx="3"/>
+  <text class="tb" x="1262" y="1141">Bedside communicator</text>
+  <text class="tm" x="1262" y="1157">/patient/communicator</text>
+  <text class="ts" x="1262" y="1175">home monitor, on a schedule</text>
+  <text class="ts" x="1262" y="1190">host side: communicator broker</text>
+  <text class="tm" x="1262" y="1212">sessions start from either end</text>
+  <path class="coup" d="M1252,1166 H898" marker-end="url(#ahc)"/>
+  <text class="lc" x="1075" y="1159" text-anchor="middle">MICS link · 2.45 GHz wake-up</text>
+
+  <!-- patient: programmer wand -->
+  <rect class="box" x="1252" y="912" width="180" height="104" rx="3"/>
+  <text class="tb" x="1262" y="933">Programmer wand</text>
+  <text class="tm" x="1262" y="949">/patient/wand</text>
+  <text class="ts" x="1262" y="967">NFC reader + 10 mT magnet</text>
+  <text class="ts" x="1262" y="982">host side: wand broker</text>
+  <text class="tm" x="1262" y="1004">place_wand · remove_wand</text>
+  <path class="coup" d="M1252,998 H908" marker-end="url(#ahc)"/>
+  <text class="lc" x="1070" y="991" text-anchor="middle">NFC, 106–847 kbps</text>
+  <path class="coup" d="M1452,912 V302 H1374" marker-end="url(#ahc)"/>
+  <text class="lc" x="1446" y="560" text-anchor="end" transform="rotate(-90 1446 560)">its magnet sets the same field</text>
+
+<path class="w" d="M0,1330 H1490" style="stroke:var(--rule)"/>
+<path class="w" d="M24,1364 H54"/><text class="ts" x="62" y="1368">logic signal</text><path class="bus" d="M162.4,1364 H192.4"/><text class="ts" x="200.4" y="1368">SPI bus (SCK, MOSI, MISO)</text><path class="pace" d="M381.4,1364 H411.4"/><text class="ts" x="419.4" y="1368">pacing energy</text><path class="sense" d="M526.0,1364 H556.0"/><text class="ts" x="564.0" y="1368">lead conductor / electrogram</text><path class="pwr" d="M763.6,1364 H793.6"/><text class="ts" x="801.6" y="1368">battery and pacing rail</text><path class="coup" d="M970.2,1364 H1000.2"/><text class="ts" x="1008.2" y="1368">physical coupling, no wire</text><path class="w" d="M1195.4,1364 H1225.4"/><circle class="dot" cx="1210.4" cy="1364" r="3.2"/><text class="ts" x="1233.4" y="1368">dot = joined; plain crossing = not joined</text>
+<text class="cap" x="24" y="1394">The ADS1292R reads tip minus ring on the RA lead, and tip minus the TS5A3159's COM on the RV lead: the ring (bipolar) or the can (unipolar). The same tip takes</text><text class="cap" x="24" y="1411">the pacing pulse when its TS5A3166 closes. Purple dashed arrows carry no current. The wand carries its own magnet, so placing it also closes the Hall switch.</text><text class="cap" x="24" y="1428">VBAT flags are the same net as the cell's terminal.</text>
+<path class="frame" d="M0,1462 H1490"/><rect class="cell" x="0" y="1462" width="330" height="46"/><text class="tbk" x="12" y="1479">TITLE</text><text class="tbv" x="12" y="1497">RP2350 pacemaker: board + patient</text><rect class="cell" x="330" y="1462" width="190" height="46"/><text class="tbk" x="342" y="1479">BOARD</text><text class="tbv" x="342" y="1497">Pico 2 · RP2350A</text><rect class="cell" x="520" y="1462" width="330" height="46"/><text class="tbk" x="532" y="1479">SOURCE</text><text class="tbv" x="532" y="1497">peripherals.yaml, ROADMAP.md, crate docs</text><rect class="cell" x="850" y="1462" width="360" height="46"/><text class="tbk" x="862" y="1479">REV</text><text class="tbv" x="862" y="1497">main @ 544603238</text><rect class="cell" x="1210" y="1462" width="280" height="46"/><text class="tbk" x="1222" y="1479">DATE</text><text class="tbv" x="1222" y="1497">2026-10-08</text>
+<rect class="frame" x="0.75" y="0.75" width="1488.5" height="1506.5"/>
+</svg>

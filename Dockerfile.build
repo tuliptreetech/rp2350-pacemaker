@@ -1,0 +1,11 @@
+# Firmware build environment: clang/lld/llvm-objcopy targeting RISC-V, the only
+# tools firmware/Makefile needs (no SDK, no riscv-gcc). Debian bookworm ships
+# clang 14 with unsuffixed tool names, which the Makefile's defaults expect.
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clang lld llvm make \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src/firmware
+ENTRYPOINT ["make"]

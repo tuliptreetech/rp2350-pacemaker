@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pacemaker Live Telemetry</title>
+<!-- Served by pacemaker_programmer.py --live: the device's own live
+     electrogram and marker channel, streamed over the telemetry session
+     (STREAM, protocol 2) and pushed here as Server-Sent Events. -->
+<style>
+:root { --bg:#ffffff; --fg:#1d232b; --muted:#5f6b7a; --line:#d9dee5; --panel:#f5f7fa;
+  --v:#1f6fd1; --a:#c2410c; --ok:#16794a; --warn:#b45309; --bad:#b91c1c; }
+@media (prefers-color-scheme: dark) { :root { --bg:#14181d; --fg:#e6e9ee; --muted:#9aa6b4; --line:#2c333c;
+  --panel:#1b2027; --v:#6ea8ff; --a:#fb923c; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; } }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin:0; background:var(--bg); color:var(--fg); display:flex; flex-direction:column;
+  font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 24px; padding:14px 16px 10px;
+  border-bottom:1px solid var(--line); }
+h1 { font-size:18px; margin:0; font-weight:600; }
+.muted { color:var(--muted); }
+.tiles { display:flex; flex-wrap:wrap; gap:10px; padding:12px 16px 0; }
+.tile { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 12px; min-width:110px; }
+.tile .k { color:var(--muted); font-size:12px; }
+.tile .v { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; }
+.tile .v small { font-size:13px; font-weight:500; color:var(--muted); }
+.v-col { color:var(--v); } .a-col { color:var(--a); }
+.ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:6px; }
+.dot.live { background:var(--ok); } .dot.down { background:var(--bad); }
+#strip { flex:1; min-height:260px; position:relative; margin:12px 16px 16px; }
+canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
+#log { padding:0 16px 14px; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live telemetry</h1>
+  <span class="muted"><span id="dot" class="dot"></span><span id="status">connecting…</span></span>
+  <span class="muted" id="prog"></span>
+</header>
+<div class="tiles">
+  <div class="tile"><div class="k">Mode</div><div class="v" id="mode">–</div></div>
+  <div class="tile"><div class="k">Ventricular rate</div><div class="v v-col"><span id="vrate">–</span> <small>bpm</small></div></div>
+  <div class="tile"><div class="k">Atrial rate</div><div class="v a-col"><span id="arate">–</span> <small>bpm</small></div></div>
+  <div class="tile"><div class="k">Last AV</div><div class="v"><span id="av">–</span> <small>ms</small></div></div>
+  <div class="tile"><div class="k">Paced (last 10)</div><div class="v"><span id="paced">–</span></div></div>
+  <div class="tile"><div class="k">Magnet</div><div class="v" id="magnet">–</div></div>
+  <div class="tile"><div class="k">Battery</div><div class="v" id="batt">–</div></div>
+</div>
+<div id="strip"><canvas id="c"></canvas></div>
+<div id="log"></div>
+<script>
+"use strict";
+const WINDOW_S = 6;          // seconds of heart time across the strip
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const $ = id => document.getElementById(id);
+
+let sps = 250, width = 0, height = 0, dpr = 1;
+let cols = 0;                // samples across the strip
+let v = [], a = [];          // one value (mV) per strip column, NaN = blank
+let marks = [];              // {col, code, sample}
+let head = -1;               // sample number of the newest sample drawn
+let scaleV = 4, scaleA = 1;  // mV that fills half a lane
+const events = [];           // recent markers for rates/AV: {sample, code}
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function resize() {
+  const r = $("strip").getBoundingClientRect();
+  dpr = window.devicePixelRatio || 1;
+  width = r.width; height = r.height;
+  canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+function reset() {
+  cols = WINDOW_S * sps;
+  v = new Array(cols).fill(NaN); a = new Array(cols).fill(NaN);
+  marks = []; head = -1;
+}
+
+// Scale each lane to the cardiac signal, not the pacing artefact: the 98th
+// percentile of |x| over the strip fills the lane, and pace spikes clip.
+// Matches the interrogation report's strips.
+function rescale() {
+  const pick = arr => {
+    const m = arr.filter(x => !isNaN(x)).map(Math.abs).sort((p, q) => p - q);
+    return m.length ? Math.max(m[Math.floor(m.length * 0.98)], 0.5) : 1;
+  };
+  scaleV = scaleV * 0.7 + pick(v) * 0.3;
+  scaleA = scaleA * 0.7 + pick(a) * 0.3;
+}
+
+function draw() {
+  if (!width) return;
+  ctx.clearRect(0, 0, width, height);
+  const band = 18;               // a marker band above each lane
+  const top = band + 4, gap = band + 14, bottom = 22;
+  const lane = (height - top - gap - bottom) / 2;
+  const yA = top + lane / 2, yV = top + lane + gap + lane / 2;
+  const gutter = 24;             // the lane letters
+  const x = c => gutter + c * (width - gutter) / cols;
+
+  // Grid: one line a second, labels in heart time.
+  ctx.strokeStyle = css("--line"); ctx.lineWidth = 1;
+  ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui, sans-serif";
+  for (let s = 0; s <= WINDOW_S; s++) {
+    const gx = Math.round(x(s * sps)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(gx, top - 6); ctx.lineTo(gx, height - bottom); ctx.stroke();
+  }
+  ctx.font = "600 15px system-ui, sans-serif"; ctx.textAlign = "center";
+  ctx.fillStyle = css("--a"); ctx.fillText("A", gutter / 2, yA + 5);
+  ctx.fillStyle = css("--v"); ctx.fillText("V", gutter / 2, yV + 5);
+  ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.fillStyle = css("--muted");
+  ctx.fillText(`A: CH2, atrial lead · V: CH1, ventricular lead · ${WINDOW_S} s sweep at ${sps} SPS · ` +
+               `half lane = ${scaleA.toFixed(1)} mV (A), ${scaleV.toFixed(1)} mV (V)`, gutter, height - 6);
+
+  const trace = (arr, yMid, scale, color) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.beginPath();
+    let pen = false;
+    for (let c = 0; c < cols; c++) {
+      const val = arr[c];
+      if (isNaN(val)) { pen = false; continue; }
+      const y = yMid - Math.max(-lane / 2, Math.min(lane / 2, val / scale * (lane / 2 - 4)));
+      if (pen) ctx.lineTo(x(c), y); else ctx.moveTo(x(c), y);
+      pen = true;
+    }
+    ctx.stroke();
+  };
+  trace(a, yA, scaleA, css("--a"));
+  trace(v, yV, scaleV, css("--v"));
+
+  // Markers: paced events as a solid tick, sensed as a label only,
+  // refractory-sensed in parentheses, as on a programmer's marker channel.
+  ctx.font = "600 12px system-ui, sans-serif"; ctx.textAlign = "center";
+  for (const m of marks) {
+    const atrial = m.code[0] === "A";
+    const color = css(atrial ? "--a" : "--v");
+    const yLane = atrial ? yA : yV;
+    const mx = x(m.col);
+    ctx.fillStyle = color; ctx.strokeStyle = color;
+    if (m.code[1] === "P") {
+      ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(mx, yLane - lane / 2 - 2); ctx.lineTo(mx, yLane + lane / 2); ctx.stroke();
+    }
+    const label = m.code[1] === "R" ? `(${m.code})` : m.code;
+    ctx.fillText(label, mx, yLane - lane / 2 - 6);
+  }
+  ctx.textAlign = "left";
+
+  // The sweep bar.
+  if (head >= 0) {
+    ctx.fillStyle = css("--fg");
+    ctx.fillRect(x((head + 1) % cols), top - 6, 2, height - top - bottom + 6);
+  }
+}
+
+function addFrame(f) {
+  if (f.first > head + 1 && head >= 0) blank(head + 1, f.first);   // a gap in the stream
+  for (let i = 0; i < f.v.length; i++) {
+    const n = f.first + i, c = n % cols;
+    v[c] = f.v[i]; a[c] = f.a[i];
+    // Erase a little ahead of the sweep so old and new never join.
+    const ahead = Math.round(sps * 0.12);
+    for (let k = 1; k <= ahead; k++) { v[(c + k) % cols] = NaN; a[(c + k) % cols] = NaN; }
+    // Drop marks the sweep has come back round to (a full strip old).
+    marks = marks.filter(m => m.sample > n + ahead - cols);
+    head = n;
+  }
+  for (const [sample, code] of f.markers) {
+    marks.push({col: sample % cols, code, sample});
+    events.push({sample, code});
+  }
+  while (events.length > 40) events.shift();
+  // The mode in effect: a magnet's DOO/VOO shows as such (firmware eff_mode()).
+  $("mode").textContent = f.magnet ? `${f.mode} · magnet` : f.mode;
+  $("magnet").textContent = f.magnet ? "ON" : "off";
+  $("magnet").className = "v " + (f.magnet ? "warn" : "muted");
+  $("batt").textContent = f.batt;
+  $("batt").className = "v " + ({OK: "ok", ERI: "warn", EOL: "bad"}[f.batt] || "");
+  updateRates();
+  if (f.markers.length) logMarkers(f.markers);
+}
+
+function blank(from, to) {
+  for (let n = from; n < to && n < from + cols; n++) { v[n % cols] = NaN; a[n % cols] = NaN; }
+}
+
+function rate(chamber) {
+  const ev = events.filter(e => e.code[0] === chamber && e.code[1] !== "R");
+  if (ev.length < 2) return null;
+  const iv = (ev[ev.length - 1].sample - ev[ev.length - 2].sample) / sps;
+  return iv > 0 ? Math.round(60 / iv) : null;
+}
+
+function updateRates() {
+  const vr = rate("V"), ar = rate("A");
+  $("vrate").textContent = vr ?? "–";
+  $("arate").textContent = ar ?? "–";
+  // AV: the last ventricular event after an atrial one.
+  for (let i = events.length - 1; i > 0; i--) {
+    if (events[i].code[0] === "V" && events[i].code[1] !== "R") {
+      for (let j = i - 1; j >= 0; j--) {
+        if (events[j].code[0] === "V") break;
+        if (events[j].code[0] === "A" && events[j].code[1] !== "R") {
+          $("av").textContent = Math.round((events[i].sample - events[j].sample) * 1000 / sps);
+          i = 0; break;
+        }
+      }
+    }
+  }
+  const last = events.filter(e => e.code[1] !== "R").slice(-10);
+  if (last.length) {
+    const paced = last.filter(e => e.code[1] === "P").length;
+    $("paced").textContent = `${paced}/${last.length}`;
+  }
+}
+
+const logLines = [];
+function logMarkers(ms) {
+  for (const [sample, code] of ms) logLines.push(`${(sample / sps).toFixed(3)} s ${code}`);
+  while (logLines.length > 16) logLines.shift();
+  $("log").textContent = logLines.join("   ");
+}
+
+let lastRescale = 0;
+function frameLoop(t) {
+  if (t - lastRescale > 1000) { rescale(); lastRescale = t; }
+  draw();
+  requestAnimationFrame(frameLoop);
+}
+
+function connect() {
+  const es = new EventSource("/events");
+  es.addEventListener("hello", e => {
+    const h = JSON.parse(e.data);
+    sps = h.sps; reset();
+    $("prog").textContent =
+      `Programmed ${h.mode} ${h.rate}/${h.utr} ppm · PAV/SAV ${h.pav}/${h.sav} ms · ` +
+      `A ${h.aamp_v.toFixed(2)} V, V ${h.amp_v.toFixed(2)} V @ ${(h.pw / 1000).toFixed(2)} ms`;
+  });
+  es.addEventListener("egm", e => addFrame(JSON.parse(e.data)));
+  es.onopen = () => { $("dot").className = "dot live"; $("status").textContent = "telemetry session open"; };
+  es.onerror = () => { $("dot").className = "dot down"; $("status").textContent = "no telemetry — is the programmer running?"; };
+}
+
+reset();
+new ResizeObserver(resize).observe($("strip"));
+connect();
+requestAnimationFrame(frameLoop);
+</script>
+</body>
+</html>

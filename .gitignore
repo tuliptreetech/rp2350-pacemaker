@@ -1,0 +1,8 @@
+firmware/start.o
+firmware/firmware.bin
+firmware/firmware.elf
+firmware/main.o
+
+__pycache__/
+.pytest_cache/
+pacemaker-interrogation*.html
