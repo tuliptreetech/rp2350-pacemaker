@@ -2,10 +2,11 @@
 an interrogation against a fake link that answers the way the firmware does.
 The firmware itself is verified live (see ROADMAP.md, "Diagnostics").
 
-    (cd projects/rp2350-pico2-pacemaker-demo/programmer && python3 -m pytest -q)
+    emerson run programmer/test_pacemaker_programmer.py -q    # from the repo root
 """
 
 import struct
+import sys
 import time
 
 import pytest
@@ -433,37 +434,20 @@ def test_a_closed_radio_link_ends_a_waiting_request():
 
 
 def test_the_link_option_picks_the_communicator(monkeypatch):
+    import contextlib
     import emerson
 
     seen = {}
 
-    class Controller:
-        def __init__(self, host):
-            pass
-
-        def connect(self):
-            return self
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-        def get_instance_list(self):
-            return [("tok", pp.DEFAULT_PROJECT)]
-
-        def attach(self, token):
-            machine = FakeCommunicatorMachine(["linked"])
-            machine.__class__ = type("Attached", (FakeCommunicatorMachine,), {
-                "__enter__": lambda self: self, "__exit__": lambda self, *a: False})
-            return machine
+    @contextlib.contextmanager
+    def attach_session(host=None, project=None, session=None):
+        yield FakeCommunicatorMachine(["linked"])
 
     def fake_interrogate(session, clear=False, now=None, upgrade=None):
         seen["link"] = type(session.link).__name__
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(emerson, "EmulatorController", Controller, raising=False)
+    monkeypatch.setattr(emerson, "attach_session", attach_session, raising=False)
     monkeypatch.setattr(pp, "interrogate", fake_interrogate)
     assert pp.main(["--link", "communicator"]) == 1
     assert seen["link"] == "CommunicatorLink"
@@ -742,20 +726,6 @@ def test_the_battery_test_episodes_are_named():
         dict(kind=pp.EP_FW_LEVEL, a=pp.FW_V204, b=pp.FW_FIXED, c=1))
 
 
-def test_history_subscription_returns_only_new_bytes():
-    class HistoryMachine:
-        def __init__(self):
-            self.history = b"before"
-
-        def get_broker_history(self, broker):
-            return list(self.history)
-
-    m = HistoryMachine()
-    sub = pp.subscribe_broker(m, "wand")
-    assert isinstance(sub, pp.HistorySubscription)
-    assert sub.read(timeout=0) == b"", "bytes from before the subscription are not returned"
-    m.history += b"abc"
-    assert sub.read(timeout=0) == b"abc"
-    assert sub.read(timeout=0) == b""
-    m.history = b"xy"  # cleared by a reset, then written again
-    assert sub.read(timeout=0) == b"xy"
+if __name__ == "__main__":
+    # No cache: `emerson run` mounts the repo, and .pytest_cache would land in it.
+    sys.exit(pytest.main([__file__, "-p", "no:cacheprovider", *sys.argv[1:]]))

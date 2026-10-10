@@ -26,10 +26,9 @@ tree](#moving-from-the-emerson-source-tree) lists what changed.
 | `firmware/` | Bare-metal RV32IMAC firmware: `main.c`, `start.S` (with the boot ROM's IMAGE_DEF block), `rp2350.ld`, `Makefile` |
 | `build.sh`, `Dockerfile.build` | Builds `firmware/firmware.bin` in a Debian container (clang 14, lld, llvm, make), so the host needs no toolchain |
 | `.emerson/peripherals.yaml` | Board wiring: every off-chip part and its pins. `emerson load` mounts it over the image's copy |
-| `emerson-py.sh` | Runs the Python host tools inside the `emerson-server` container, where the `emerson` module lives |
 | `programmer/` | Host-side clinic programmer (`pacemaker_programmer.py`), its live-view page and its pytest suite |
 | `scenarios/` | The ACCOLADE reproductions: `accolade_safety_mode.py`, `accolade_v204.py` |
-| `.claude/skills/` | The `emerson` and `emerson-python` Claude Code skills (`emerson skills pull`) |
+| `.claude/skills/` | The `emerson` and `emerson-python` Claude Code skills (rewritten here for emerson 1.0.16 from the `emerson skills pull` versions; a pull overwrites them) |
 
 The emulator project itself (`emerson.yaml`, the boot ROM and the device
 models) ships inside the Docker image as the project `rp2350`, at
@@ -40,9 +39,9 @@ scheduler and `realtime: true`. The design notes (`notes/stage-*.md`) and
 
 ## Running it
 
-Requires Docker and the `emerson` tool (1.0.14 or later, with a license key
-stored) and the `ghcr.io/tuliptreetech/emerson/rp2350` image installed. Last
-verified with emerson 1.0.15 and image 1.0.16; `emerson info` shows both.
+Requires Docker and the `emerson` tool (1.0.16 or later, for `emerson run`,
+with a license key stored) and the `ghcr.io/tuliptreetech/emerson/rp2350` image installed. Last
+verified with emerson 1.0.16 and image 1.0.16; `emerson info` shows both.
 
 ```
 ./build.sh                          # firmware/firmware.bin; ./build.sh clean, ./build.sh --rebuild (toolchain image)
@@ -335,10 +334,10 @@ pacemaker_programmer.py --upgrade v2.04|fixed  # move the firmware level, then i
 
 Other options: `--host`, `--project` (default `rp2350`), `--session TOKEN`,
 `--html PATH`, `--timeout`, `--port` and `--bind`. Run its tests with
-`./emerson-py.sh -m pytest -q programmer`. They import the `emerson` module,
-so they run in the container. In this README, `pacemaker_programmer.py` and
-the scenario scripts are run through `./emerson-py.sh`; see [Running the host
-tools here](#running-the-host-tools-here).
+`emerson run programmer/test_pacemaker_programmer.py -q`. They import the
+`emerson` module, so they run in the image. In this README,
+`pacemaker_programmer.py` and the scenario scripts are run with `emerson run`;
+see [Running the host tools here](#running-the-host-tools-here).
 
 **`scenarios/accolade_safety_mode.py`** reproduces the recall. A defective
 cell about 2 years from replacement takes automatic radio wakeups at
@@ -361,59 +360,60 @@ wakeups:
 
 Choose sub-scenarios with `--only a,b,c,d`.
 
-Both scripts start their own session unless you pass `--session`. A session
-passed in is reset first, which blanks the EEPROM. Stop your own session
-(`emerson stop`) before you run one: the emerson-python skill warns that a
-stray session can stall a new one. Their windows are paced in guest time
+Both scripts start their own session unless you pass `--session`, and stop
+it at the end. A session passed in is reset first, which blanks the EEPROM.
+`emerson run` still needs a session of yours to exist (it refuses with none);
+the scenario's own runs beside it. Their windows are paced in guest time
 where that matters, but some waits are still wall seconds tuned on a host
 that ran at 0.5× wall.
 
 ### Running the host tools here
 
-The `emerson` Python module is only inside the `emerson-server` container,
-and the container mounts only `flash.bin` and `peripherals.yaml` from this
-repo. `./emerson-py.sh` copies `programmer/` and `scenarios/` into a fresh
-temp directory in the container and runs `python3` there with your arguments.
-Any `*.html` the run writes (the interrogation report) is copied back into
-the current directory. `--host` keeps its default
-`http://localhost:10314`, which is the server as seen from inside the
-container.
+The `emerson` Python module is only in the emulator's Docker image.
+`emerson run <script>` runs a script in a throwaway container from the image
+the server is running, with the repo (the current directory) mounted as its
+working directory and `EMERSON_HOST`, `EMERSON_SESSION` and `EMERSON_PROJECT`
+set to the session `emerson ctl` would use. The programmer and the scenarios
+take their `--host` (and the programmer its `--session` and `--project`)
+defaults from those, so they need no flags. Run from the repo root. Reports
+(`pacemaker-interrogation.html`) are written straight into it.
 
 ```
 emerson load firmware/firmware.bin && emerson start && emerson ctl go
-./emerson-py.sh programmer/pacemaker_programmer.py          # -> ./pacemaker-interrogation.html
-./emerson-py.sh -m pytest -q -p no:cacheprovider programmer
-emerson stop                                                 # the scenarios start their own session
-./emerson-py.sh scenarios/accolade_safety_mode.py --no-harm
-./emerson-py.sh scenarios/accolade_v204.py --only c
+emerson run programmer/pacemaker_programmer.py          # -> ./pacemaker-interrogation.html
+emerson run programmer/test_pacemaker_programmer.py -q  # pytest flags after the file
+emerson run scenarios/accolade_safety_mode.py --no-harm
+emerson run scenarios/accolade_v204.py --only c
 ```
 
-Verified on an Apple M3 Max (2026-10-08, emerson 1.0.15, image 1.0.16), with
-the two scenarios running in parallel:
+Verified with `emerson run` on an Apple M3 Max (2026-10-10, emerson 1.0.16,
+image 1.0.16), the two scenarios running in parallel:
 
 | Run | Result | Wall time |
 | --- | --- | --- |
-| programmer pytest | 51 passed | < 1 s |
+| programmer tests | 50 passed | < 1 s |
 | programmer interrogation (wand) | summary + HTML report | ~10 s |
-| `accolade_safety_mode.py --no-harm` | PASS: reproduced | 224 s |
-| `accolade_safety_mode.py` (with the harm phase) | PASS: reproduced | 848 s |
-| `accolade_v204.py` (a–d) | every check PASS | 1320 s |
+| programmer `--live` with `-p 8765` | page and `/events` stream on the host | — |
+| `accolade_safety_mode.py --no-harm` | PASS: reproduced | 110 s |
+| `accolade_v204.py --only c` | every check PASS | 259 s |
 
-Ctrl+C or killing `emerson-py.sh` does not stop the Python process in the
-container. Stop it with `emerson exec pkill -INT -f pacemaker_programmer.py`
-(or the scenario's name). The programmer's `finally` then lifts the wand.
+The full harm phase (848 s) and all of `accolade_v204.py` (1320 s) were last
+run on 2026-10-08 through an earlier copy-into-the-container wrapper, and
+have not been rerun with `emerson run`.
 
-**Live view.** The container publishes only port 10314, so the live page
-needs `--bind 0.0.0.0` and a port forward into the container:
+Ctrl+C reaches the script (the container runs with `--init`), so the
+programmer's `finally` lifts the wand and the scenarios stop their sessions.
+Without a terminal, send SIGINT the same way:
+`docker kill -s INT $(docker ps -q --filter publish=8765)`. `docker stop`
+sends SIGTERM, which ends Python without running `finally`, leaving the wand
+placed (`emerson ctl action /patient/wand remove_wand` lifts it).
+
+**Live view.** Publish the port with `-p`. `emerson run` sets
+`EMERSON_BIND_HOST=0.0.0.0`, which the programmer's `--bind` defaults to:
 
 ```
-./emerson-py.sh programmer/pacemaker_programmer.py --live --bind 0.0.0.0 &
-docker run -d --rm --name emerson-live-fwd -p 8765:8765 alpine/socat \
-    tcp-listen:8765,fork,reuseaddr \
-    tcp-connect:$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' emerson-server):8765
+emerson run -p 8765 programmer/pacemaker_programmer.py --live
 open http://localhost:8765/
-# afterwards:
-docker stop emerson-live-fwd; emerson exec pkill -INT -f pacemaker_programmer.py
 ```
 
 ## Quick checks
@@ -446,8 +446,9 @@ cuts projected longevity from about 13 years to about 8.
 
 ## Tests
 
-- Programmer: `./emerson-py.sh -m pytest -q -p no:cacheprovider programmer`
-  (51 tests, no session needed).
+- Programmer: `emerson run programmer/test_pacemaker_programmer.py -q`
+  (50 tests; they use no emulator, but `emerson run` needs a session to
+  exist).
 - The firmware has no unit tests. Verify it live with `emerson ctl` and the
   scenarios, and check magnitudes, not just signs.
 - The device models' Rust tests (`rp2350-model`'s `test_pacemaker`,
@@ -507,15 +508,11 @@ What had to change to run on the packaged `emerson` tool, and why:
   / `stop` replace `emctl set-project` / `start`, and `emerson ctl <cmd>`
   replaces `emctl <cmd>`. `./build.sh` replaces hydration's docker build, and
   `.emerson/peripherals.yaml` replaces `peripherals.yaml`.
-- **Python binding.** The image ships emerson's Python binding 1.0.11, which
-  has no `Machine.subscribe_broker`. `pacemaker_programmer.subscribe_broker`
-  uses it where a binding has it. Otherwise it falls back to
-  `HistorySubscription`, which polls `get_broker_history` and returns only the
-  bytes after its starting point. The programmer and the scenarios both go
-  through it. Each read fetches the broker's whole history, so a poll costs
-  more as tty1 grows over a long scenario.
-- **Host tools run in the container** (`./emerson-py.sh`), and the live view
-  gained `--bind` for the port forward.
+- **Python binding.** The programmer and the scenarios read the brokers
+  through the binding's `Machine.subscribe_broker`, and the programmer finds
+  its session with `emerson.attach_session()`.
+- **Host tools run with `emerson run`**, in a container from the server's
+  image. The live view binds `EMERSON_BIND_HOST` so `-p` can reach it.
 - **Wall-clock timing.** `accolade_safety_mode.py`'s post-latch checks used
   wall-second windows, sized for an emulator at 0.5× wall. At 0.23× wall the
   pocket-stimulation check saw only one pace in its 5 s window and failed. Those

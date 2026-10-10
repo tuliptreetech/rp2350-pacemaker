@@ -30,11 +30,13 @@ scheduled on the implant clock, so it costs what it costs however the clock is s
 
 It uses the emerson library only (and the clinic programmer, programmer/pacemaker_programmer.py, to upgrade
 and read the device). By default it starts its own sessions and stops them at the end. Needs
-emerson-server up on firmware/firmware.bin (`emerson load`); run it there with ../emerson-py.sh.
+emerson-server up on firmware/firmware.bin (`emerson load`); run it from the repo root with
+`emerson run scenarios/accolade_v204.py`, which sets EMERSON_HOST for `--host`.
 """
 
 import argparse
 import collections
+import os
 import re
 import sys
 import time
@@ -568,7 +570,8 @@ def scenario_d(conn, args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--host", default="http://localhost:10314")
+    p.add_argument("--host", default=os.environ.get("EMERSON_HOST", "http://localhost:10314"),
+                   help="franklin server (default: EMERSON_HOST, else %(default)s)")
     p.add_argument("--only", default="a,b,c,d", help="sub-scenarios to run, e.g. a,b (default all)")
     p.add_argument("--scale", type=int, default=3600, help="implant s per guest s for the 48-hour windows (default %(default)s)")
     p.add_argument("--ff-scale", type=int, default=800000,

@@ -26,7 +26,8 @@ bipolar sensing at its programmed sensitivity, the same patient and the same eff
 It uses the emerson library only. By default it starts its own session of the project and stops it
 at the end; `--session TOKEN` runs it in a session you already have (which it resets first, blanking
 the EEPROM: a new device). Needs emerson-server up on firmware/firmware.bin (`emerson load`); run it
-there with ../emerson-py.sh.
+from the repo root with `emerson run scenarios/accolade_safety_mode.py`, which runs it in a container from
+the server's image and sets EMERSON_HOST for `--host`.
 
 Time. The firmware's implant clock runs `--scale` implant seconds per guest second (default 3600,
 so 48 implant hours are 48 guest seconds) and the cell's aging factor must be the same number, so
@@ -36,6 +37,7 @@ clinic's programmer does (programmer/pacemaker_programmer.py).
 """
 
 import argparse
+import os
 import re
 import statistics
 import sys
@@ -60,8 +62,8 @@ class Run:
         self.m = machine
         self.scale = scale
         self.wall0 = time.monotonic()
-        self.tty0 = pp.subscribe_broker(machine, "tty0")
-        self.tty1 = pp.subscribe_broker(machine, "tty1")
+        self.tty0 = machine.subscribe_broker("tty0")
+        self.tty1 = machine.subscribe_broker("tty1")
         self.buf = {"tty0": b"", "tty1": b""}
         self.lines1 = []          # tty1 lines since the last clear_lines()
         self.events = []          # (wall_s, guest_s, text)
@@ -364,7 +366,8 @@ def interrogate(run, link_kind, clear=False):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--host", default="http://localhost:10314")
+    p.add_argument("--host", default=os.environ.get("EMERSON_HOST", "http://localhost:10314"),
+                   help="franklin server (default: EMERSON_HOST, else %(default)s)")
     p.add_argument("--session", default=None, metavar="TOKEN", help="use this session (it is reset first)")
     p.add_argument("--healthy", action="store_true", help="control: no battery defect; no resets, no latch")
     p.add_argument("--scale", type=int, default=3600, help="implant s per guest s (default %(default)s: 48 h = 48 s)")

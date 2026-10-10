@@ -261,7 +261,7 @@ def episode_detail(e):
 
 # --- The link: the wand, through the emerson library -------------------------
 
-DEFAULT_PROJECT = "rp2350-pico2-pacemaker-demo"
+DEFAULT_PROJECT = "rp2350"
 
 
 class WandLink:
