@@ -1,11 +1,9 @@
 /* RP2350 (RISC-V Hazard3) dual-chamber pacemaker: DDD, with the
  * rate-responsive DDDR and VVIR, and DOO, VVI, VOO and OOO.
  *
- * Raw MMIO only, no pico-sdk -- same style as the other rp2350-pico2 demos,
- * clocked straight off the 12 MHz crystal (see clocks_init).
- * The closed loop is built from four real datasheet parts and the simulated
- * heart they share, plus a magnet sensor (see ROADMAP.md for the board
- * wiring):
+ * Raw MMIO only, no pico-sdk -- clocked straight off the 12 MHz crystal 
+ * (see clocks_init).  The closed loop is built from four real datasheet 
+ * parts and the simulated heart they share, plus a magnet sensor.
  *
  *   - TI ADS1292R on SPI0 (SCK GP18, MOSI GP19, MISO GP16, CS GP17, DRDY GP20):
  *     the sensing front end, 500 SPS at gain 6. CH1 is the ventricular lead

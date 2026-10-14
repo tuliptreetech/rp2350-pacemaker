@@ -1,0 +1,902 @@
+<title>Pacemaker Heart Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one-screen console. Heart stage on the left, story card and controls on the right,
+   a monitor bar and rhythm strip (surface ECG + marker channel) along the bottom. */
+:root {
+  --bg:#eef1f4; --surface:#ffffff; --ink:#17202b; --muted:#5a6576; --line:#d5dce4; --hover:rgba(31,111,209,.16);
+  --a:#c2410c; --v:#1f6fd1; --node:#c98a00; --bad:#b91c1c; --ok:#16794a;
+  --muscle:#e4a49e; --muscle-edge:#b55a57; --cavity:#fbeeec; --vessel:#d08079; --vessel-b:#9196c8;
+  --lead:#38414e; --can:#c3cad3; --can-edge:#6f7a87; --grid:rgba(200,70,70,.15); --trace:#17202b;
+  --f-ui:"Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#0f141a; --surface:#161d25; --ink:#e6eaf0; --muted:#94a0b0; --line:#27313c; --hover:rgba(110,168,255,.2);
+  --a:#fb923c; --v:#6ea8ff; --node:#f2c14e; --bad:#f87171; --ok:#4ade80;
+  --muscle:#8a3c43; --muscle-edge:#c56d6f; --cavity:#26171c; --vessel:#6e3238; --vessel-b:#43477a;
+  --lead:#c9d1dc; --can:#5a6471; --can-edge:#a3adba; --grid:rgba(255,120,120,.09); --trace:#e6eaf0;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg:#0f141a; --surface:#161d25; --ink:#e6eaf0; --muted:#94a0b0; --line:#27313c; --hover:rgba(110,168,255,.2);
+  --a:#fb923c; --v:#6ea8ff; --node:#f2c14e; --bad:#f87171; --ok:#4ade80;
+  --muscle:#8a3c43; --muscle-edge:#c56d6f; --cavity:#26171c; --vessel:#6e3238; --vessel-b:#43477a;
+  --lead:#c9d1dc; --can:#5a6471; --can-edge:#a3adba; --grid:rgba(255,120,120,.09); --trace:#e6eaf0;
+  color-scheme: dark; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { background:var(--bg); color:var(--ink); font:15px/1.45 var(--f-ui); margin:0;
+  display:grid; grid-template-rows:auto minmax(0,1fr) auto; gap:12px; padding-inline:16px; padding-block:12px; }
+button { font:inherit; color:inherit; }
+:focus-visible { outline:2px solid var(--v); outline-offset:2px; }
+
+header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 16px; }
+h1 { margin:0; font-size:21px; font-weight:700; letter-spacing:-.01em; text-wrap:balance; }
+h1 small { font-weight:400; color:var(--muted); font-size:14px; margin-left:10px; letter-spacing:0; }
+.hbtns { display:flex; gap:6px; flex-wrap:wrap; }
+.btn { background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:5px 11px; cursor:pointer; font-size:14px; }
+.btn:hover { border-color:var(--muted); }
+.btn[aria-pressed="true"] { background:var(--ink); color:var(--bg); border-color:var(--ink); }
+
+main { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr); gap:12px; min-height:0; }
+.stage { position:relative; background:var(--surface); border:1px solid var(--line); border-radius:10px; min-height:0; overflow:hidden; }
+.stage svg { position:absolute; inset:0; width:100%; height:100%; display:block; }
+.side { display:flex; flex-direction:column; gap:12px; min-height:0; overflow:auto; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px 16px; min-width:0; }
+
+/* story */
+.tabs { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:12px; }
+.tab { border:1px solid var(--line); background:transparent; border-radius:999px; padding:3px 11px; font-size:13px; cursor:pointer; color:var(--muted); }
+.tab[aria-selected="true"] { color:var(--ink); border-color:var(--ink); font-weight:700; }
+.stepno { font:600 12px var(--f-mono); color:var(--muted); letter-spacing:.06em; text-transform:uppercase; }
+.story h2 { margin:4px 0 6px; font-size:20px; line-height:1.2; text-wrap:balance; }
+.story p { margin:0; max-width:62ch; }
+.story code { font:13px var(--f-mono); background:var(--bg); padding:1px 4px; border-radius:4px; }
+.nav { display:flex; gap:8px; margin-top:12px; align-items:center; }
+.dots { display:flex; gap:5px; margin-left:auto; }
+.dots i { width:7px; height:7px; border-radius:50%; background:var(--line); }
+.dots i.on { background:var(--ink); }
+
+/* controls */
+.sect { font:600 12px var(--f-mono); color:var(--muted); letter-spacing:.06em; text-transform:uppercase; margin:0 0 8px; }
+.ctls { display:grid; grid-template-columns:auto minmax(0,1fr); gap:7px 12px; align-items:center; font-size:14px; }
+.ctls > span { color:var(--muted); }
+.seg { display:flex; flex-wrap:wrap; border:1px solid var(--line); border-radius:6px; overflow:hidden; width:max-content; max-width:100%; }
+.seg button { border:0; background:transparent; padding:3px 10px; cursor:pointer; font-size:13px; border-right:1px solid var(--line); }
+.seg button:last-child { border-right:0; }
+.seg button[aria-pressed="true"] { background:var(--ink); color:var(--bg); }
+.seg button.warn[aria-pressed="true"] { background:var(--bad); color:#fff; }
+.rate { display:flex; align-items:center; gap:10px; }
+.rate input { flex:1; min-width:0; accent-color:var(--a); }
+.rate output { font:13px var(--f-mono); min-width:64px; }
+
+/* log */
+.log { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:5px; font-size:13.5px; }
+.log li { display:grid; grid-template-columns:52px 40px minmax(0,1fr); gap:8px; align-items:baseline; }
+.log li:first-child { font-weight:700; }
+.log .lt { font:12px var(--f-mono); color:var(--muted); font-variant-numeric:tabular-nums; }
+.chip { font:600 11.5px var(--f-mono); padding:1px 0; border-radius:4px; text-align:center; border:1px solid currentColor; }
+.ca { color:var(--a); } .cv { color:var(--v); } .cx { color:var(--bad); } .cm { color:var(--muted); }
+
+/* monitor */
+.monitor { background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px 18px; padding:8px 12px; border-bottom:1px solid var(--line); }
+.tc { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.clock { font:13px var(--f-mono); color:var(--muted); font-variant-numeric:tabular-nums; min-width:92px; }
+.tiles { display:flex; flex-wrap:wrap; gap:6px 20px; margin-left:auto; align-items:baseline; }
+.tile { display:flex; gap:6px; align-items:baseline; }
+.tile .k { color:var(--muted); font-size:12.5px; }
+.tile .val { font:600 17px var(--f-mono); font-variant-numeric:tabular-nums; }
+.alarms { display:flex; gap:5px; flex-wrap:wrap; }
+.alarm { font:600 11.5px var(--f-mono); color:#fff; background:var(--bad); padding:2px 7px; border-radius:4px; }
+.alarm.info { background:var(--muted); }
+#strip { height:170px; position:relative; }
+#strip canvas { position:absolute; inset:0; width:100%; height:100%; }
+
+/* svg */
+.muscle { fill:var(--muscle); stroke:var(--muscle-edge); stroke-width:2; }
+.cav { fill:var(--cavity); stroke:var(--muscle-edge); stroke-width:1.2; }
+.vessel { fill:none; stroke:var(--vessel); }
+.vessel-b { fill:none; stroke:var(--vessel-b); }
+.valve { stroke:var(--muscle-edge); stroke-width:4; stroke-linecap:round; fill:none; }
+.path-faint { fill:none; stroke:var(--node); stroke-width:1.5; stroke-dasharray:3 4; opacity:.55; }
+.bundle { fill:none; stroke:var(--node); stroke-width:3; stroke-linecap:round; }
+.bundle-base { fill:none; stroke:var(--node); stroke-width:2; stroke-linecap:round; opacity:.35; }
+.node { fill:var(--node); stroke:var(--surface); stroke-width:1.5; }
+.node.silent { fill:var(--muted); }
+.lead { fill:none; stroke:var(--lead); stroke-width:4; stroke-linecap:round; }
+.pulse { fill:none; stroke-width:7; stroke-linecap:round; }
+.lbl { font:700 15px var(--f-ui); fill:var(--muscle-edge); pointer-events:none; }
+.lbl-s { font:400 12px var(--f-ui); fill:var(--ink); pointer-events:none; }
+.can-body { fill:var(--can); stroke:var(--can-edge); stroke-width:2; }
+.can-body.alarm { stroke:var(--bad); stroke-width:3.5; }
+.can-head { fill:var(--surface); fill-opacity:.7; stroke:var(--can-edge); stroke-width:1.5; }
+.can-txt { font:600 15px var(--f-mono); fill:var(--ink); text-anchor:middle; pointer-events:none; }
+.can-sub { font:400 11px var(--f-mono); fill:var(--ink); text-anchor:middle; pointer-events:none; }
+.fx { pointer-events:none; }
+.hit-area { fill:transparent; stroke:transparent; stroke-width:2; cursor:pointer; pointer-events:all; }
+.hit-line { fill:none; stroke:transparent; stroke-width:18; stroke-linecap:round; cursor:pointer; pointer-events:stroke; }
+.hit-area:hover, .hit-area:focus-visible { fill:var(--hover); stroke:var(--v); stroke-dasharray:4 3; outline:none; }
+.hit-line:hover, .hit-line:focus-visible { stroke:var(--hover); outline:none; }
+#magnetG { transition:transform .45s cubic-bezier(.3,.7,.3,1); }
+
+.tip { position:absolute; pointer-events:none; background:var(--ink); color:var(--bg); border-radius:6px; padding:6px 10px;
+  font-size:13px; line-height:1.35; max-width:240px; transform:translate(-50%, calc(-100% - 14px)); }
+.tip b { display:block; font-size:14px; }
+.toast { position:absolute; left:50%; top:14px; transform:translateX(-50%); background:var(--ink); color:var(--bg);
+  padding:8px 16px; border-radius:999px; font-weight:700; font-size:15px; transition:opacity .3s; white-space:nowrap; max-width:calc(100% - 24px); overflow:hidden; text-overflow:ellipsis; }
+.keys { font-size:12.5px; color:var(--muted); }
+.keys kbd { font:11.5px var(--f-mono); border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 4px; }
+
+@media (max-width: 900px) {
+  html, body { height:auto; }
+  body { display:flex; flex-direction:column; }
+  main { grid-template-columns:minmax(0,1fr); }
+  .stage { aspect-ratio: 640 / 580; max-width:100%; }
+  .side { overflow:visible; }
+  .tiles { margin-left:0; }
+}
+</style>
+
+<header>
+  <h1>Pacemaker Heart Explorer <small>RP2350 dual-chamber pacemaker · firmware 1.4 defaults</small></h1>
+  <div class="hbtns">
+    <button class="btn" id="btnLabels" aria-pressed="true">Labels</button>
+    <button class="btn" id="btnTheme">Light / dark</button>
+    <button class="btn" id="btnReset">Reset patient</button>
+  </div>
+</header>
+
+<main>
+  <div class="stage" id="stage">
+    <svg viewBox="0 0 640 580" id="svg" role="img" aria-label="Heart with a dual-chamber pacemaker and its two leads">
+      <defs>
+        <clipPath id="clipHeart"><path id="outerClip"/></clipPath>
+        <clipPath id="clipUpper"><rect x="0" y="0" width="640" height="318"/></clipPath>
+        <clipPath id="clipLower"><rect x="0" y="318" width="640" height="300"/></clipPath>
+      </defs>
+
+      <!-- great vessels -->
+      <path class="vessel" stroke-width="40" d="M300 215 C295 130 305 92 350 82 C400 72 430 102 432 178"/>
+      <path class="vessel-b" stroke-width="30" d="M318 228 C330 178 352 152 394 142"/>
+      <path class="vessel-b" stroke-width="48" d="M183 40 L186 215"/>
+
+      <!-- myocardium + depolarization tint -->
+      <path class="muscle" id="outer"/>
+      <g clip-path="url(#clipHeart)" class="fx">
+        <g clip-path="url(#clipUpper)">
+          <circle id="aFill" r="0" fill="var(--a)" opacity="0"/>
+          <circle id="aFront" r="0" fill="none" stroke="var(--a)" stroke-width="10" opacity="0"/>
+        </g>
+        <g clip-path="url(#clipLower)">
+          <circle id="vFill" r="0" fill="var(--v)" opacity="0"/>
+          <circle id="vFront" r="0" fill="none" stroke="var(--v)" stroke-width="12" opacity="0"/>
+        </g>
+      </g>
+
+      <!-- chambers -->
+      <path class="cav" id="cavRA" d="M160 228 C132 245 128 290 140 305 L288 305 C292 270 287 240 272 225 C242 214 195 215 160 228 Z"/>
+      <path class="cav" id="cavLA" d="M324 225 C319 250 317 280 320 300 L470 298 C478 265 465 225 430 218 C395 212 355 215 324 225 Z"/>
+      <path class="cav" id="cavRV" d="M140 335 L288 335 C292 400 302 455 312 500 C255 478 180 430 152 380 C144 365 140 350 140 335 Z"/>
+      <path class="cav" id="cavLV" d="M340 335 L458 333 C458 400 422 458 346 502 C341 445 336 390 340 335 Z"/>
+      <path class="valve" d="M172 307 L198 330 M262 307 L236 330 M346 302 L370 328 M446 300 L420 328"/>
+
+      <!-- conduction system -->
+      <path class="path-faint" d="M158 216 C175 270 245 300 298 312"/>
+      <g id="bundlesBase">
+        <path class="bundle-base" d="M298 312 L306 342 C300 400 304 450 312 492 C265 470 195 430 162 372"/>
+        <path class="bundle-base" d="M306 342 C330 400 338 450 336 500 C400 470 448 410 466 342"/>
+      </g>
+      <g id="bundles" class="fx" opacity="0">
+        <path class="bundle" pathLength="1" stroke-dasharray="1" d="M298 312 L306 342 C300 400 304 450 312 492 C265 470 195 430 162 372"/>
+        <path class="bundle" pathLength="1" stroke-dasharray="1" d="M298 312 L306 342 C330 400 338 450 336 500 C400 470 448 410 466 342"/>
+      </g>
+      <circle id="saHalo" class="fx" cx="158" cy="216" r="8" fill="none" stroke="var(--node)" stroke-width="3" opacity="0"/>
+      <circle id="saNode" class="node" cx="158" cy="216" r="8"/>
+      <circle id="avHalo" class="fx" cx="298" cy="312" r="10" fill="var(--node)" opacity="0"/>
+      <circle id="avNode" class="node" cx="298" cy="312" r="7"/>
+      <path id="avX" class="fx" d="M288 302 L308 322 M308 302 L288 322" stroke="var(--bad)" stroke-width="4" stroke-linecap="round" opacity="0"/>
+
+      <!-- leads -->
+      <path class="lead" id="leadA" d="M500 66 C430 22 270 18 186 32 C180 80 180 160 184 200 C186 245 220 255 238 234"/>
+      <path class="lead" id="leadV" d="M512 76 C440 36 280 32 198 44 C192 92 194 170 198 225 C202 270 214 300 228 335 C250 390 280 450 300 490"/>
+      <path class="pulse fx" id="aPulse" pathLength="1" stroke="var(--a)" stroke-dasharray="0.1 2" opacity="0"/>
+      <path class="pulse fx" id="vPulse" pathLength="1" stroke="var(--v)" stroke-dasharray="0.1 2" opacity="0"/>
+      <circle cx="238" cy="234" r="5" fill="var(--lead)"/>
+      <circle cx="300" cy="490" r="5" fill="var(--lead)"/>
+      <circle id="aFlash" class="fx" cx="238" cy="234" r="0" fill="var(--a)" opacity="0"/>
+      <circle id="vFlash" class="fx" cx="300" cy="490" r="0" fill="var(--v)" opacity="0"/>
+      <g id="aNoCap" class="fx" opacity="0"><circle cx="238" cy="234" r="15" fill="none" stroke="var(--bad)" stroke-width="3"/></g>
+      <g id="vNoCap" class="fx" opacity="0"><circle cx="300" cy="490" r="15" fill="none" stroke="var(--bad)" stroke-width="3"/></g>
+      <g id="aBreak" class="fx" opacity="0"></g>
+      <g id="vBreak" class="fx" opacity="0"></g>
+
+      <!-- pacemaker -->
+      <g id="canG">
+        <rect class="can-head" x="490" y="50" width="42" height="50" rx="9"/>
+        <rect class="can-body" id="canBody" x="524" y="30" width="102" height="102" rx="36"/>
+        <text class="can-txt" id="canMode" x="575" y="72">DDD</text>
+        <text class="can-sub" id="canRate" x="575" y="90">60 ppm</text>
+        <rect x="552" y="102" width="40" height="10" rx="2" fill="none" stroke="var(--ink)" stroke-width="1.2"/>
+        <rect x="592" y="105" width="3" height="4" fill="var(--ink)"/>
+        <rect id="battFill" x="554" y="104" width="34" height="6" fill="var(--ok)"/>
+        <circle id="canLed" cx="604" cy="52" r="4" fill="var(--muted)"/>
+      </g>
+      <g id="magnetG" style="transform:translate(575px,205px)">
+        <path d="M-26 -18 L-26 6 A26 26 0 0 0 26 6 L26 -18 L12 -18 L12 6 A12 12 0 0 1 -12 6 L-12 -18 Z" fill="var(--bad)" stroke="var(--ink)" stroke-width="1.2"/>
+        <rect x="-26" y="-24" width="14" height="8" fill="var(--can-edge)"/>
+        <rect x="12" y="-24" width="14" height="8" fill="var(--can-edge)"/>
+      </g>
+
+      <!-- labels -->
+      <g id="labels">
+        <text class="lbl" x="196" y="272">RA</text>
+        <text class="lbl" x="384" y="266">LA</text>
+        <text class="lbl" x="206" y="392">RV</text>
+        <text class="lbl" x="382" y="404">LV</text>
+        <text class="lbl-s" x="146" y="198" text-anchor="end">SA node</text>
+        <text class="lbl-s" x="312" y="322">AV node</text>
+        <text class="lbl-s" x="248" y="252">atrial lead</text>
+        <text class="lbl-s" x="292" y="518" text-anchor="end">ventricular lead</text>
+        <text class="lbl-s" x="575" y="150" text-anchor="middle">pacemaker</text>
+        <text class="lbl-s" id="magLbl" x="575" y="242" text-anchor="middle">magnet</text>
+      </g>
+
+      <!-- click targets -->
+      <path class="hit-area" data-hit="atrium" d="M160 228 C132 245 128 290 140 305 L288 305 C292 270 287 240 272 225 C242 214 195 215 160 228 Z"/>
+      <path class="hit-line" data-hit="vlead" d="M512 76 C440 36 280 32 198 44 C192 92 194 170 198 225 C202 270 214 300 228 335 C250 390 280 450 300 490"/>
+      <path class="hit-line" data-hit="alead" d="M500 66 C430 22 270 18 186 32 C180 80 180 160 184 200 C186 245 220 255 238 234"/>
+      <circle class="hit-area" data-hit="sa" cx="158" cy="216" r="17"/>
+      <circle class="hit-area" data-hit="av" cx="298" cy="312" r="17"/>
+      <rect class="hit-area" data-hit="can" x="486" y="26" width="144" height="110" rx="30"/>
+      <rect class="hit-area" id="magHit" data-hit="magnet" x="543" y="175" width="64" height="62" rx="10"/>
+    </svg>
+    <div class="tip" id="tip" hidden></div>
+    <div class="toast" id="toast" style="opacity:0"></div>
+  </div>
+
+  <div class="side">
+    <section class="card story" aria-live="polite">
+      <div class="tabs" id="tabs" role="tablist"></div>
+      <div class="stepno" id="stepNo"></div>
+      <h2 id="stepTitle"></h2>
+      <p id="stepBody"></p>
+      <div class="nav">
+        <button class="btn" id="prev">← Back</button>
+        <button class="btn" id="next">Next →</button>
+        <div class="dots" id="dots"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 class="sect">Patient and device</h3>
+      <div class="ctls">
+        <span>SA node</span>
+        <div class="rate"><input type="range" id="sinus" min="0" max="140" step="5" aria-label="Sinus rate"><output id="sinusOut"></output></div>
+        <span>AV node</span>
+        <div class="seg" data-key="block"><button data-val="none">Normal</button><button data-val="second" class="warn">2nd° (Mobitz II)</button><button data-val="third" class="warn">3rd°</button></div>
+        <span>Atrial capture</span>
+        <div class="seg" data-key="aCap"><button data-val="true">OK</button><button data-val="false" class="warn">Lost</button></div>
+        <span>Atrial lead</span>
+        <div class="seg" data-key="aLead"><button data-val="true">Intact</button><button data-val="false" class="warn">Fractured</button></div>
+        <span>Ventricular lead</span>
+        <div class="seg" data-key="vLead"><button data-val="true">Intact</button><button data-val="false" class="warn">Fractured</button></div>
+        <span>Pacemaker</span>
+        <div class="seg" data-key="device"><button data-val="true">On</button><button data-val="false" class="warn">Off</button></div>
+        <span>Battery</span>
+        <div class="seg" data-key="battery"><button data-val="ok">OK</button><button data-val="eri" class="warn">ERI</button><button data-val="safety" class="warn">Safety Mode</button></div>
+        <span>Magnet</span>
+        <div class="seg" data-key="magnet"><button data-val="false">Off</button><button data-val="true">On</button></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 class="sect">What just happened</h3>
+      <ul class="log" id="log"></ul>
+    </section>
+    <div class="keys"><kbd>Space</kbd> play/pause · <kbd>S</kbd> step one event · <kbd>←</kbd><kbd>→</kbd> story steps · <kbd>1</kbd>–<kbd>4</kbd> speed · <kbd>L</kbd> labels · click the heart, leads, pacemaker or magnet</div>
+  </div>
+</main>
+
+<section class="monitor">
+  <div class="bar">
+    <div class="tc">
+      <button class="btn" id="play" style="min-width:76px">Pause</button>
+      <button class="btn" id="step">Step</button>
+      <div class="seg" id="speeds"><button data-s="1">1×</button><button data-s="0.5">½×</button><button data-s="0.25">¼×</button><button data-s="0.1">⅒×</button></div>
+      <span class="clock" id="clock">0.0 s</span>
+    </div>
+    <div class="tiles">
+      <div class="tile"><span class="k">Mode</span><span class="val" id="tMode">DDD</span></div>
+      <div class="tile"><span class="k">V rate</span><span class="val cv" id="tV">–</span></div>
+      <div class="tile"><span class="k">A rate</span><span class="val ca" id="tA">–</span></div>
+      <div class="tile"><span class="k">AV</span><span class="val" id="tAV">–</span></div>
+      <div class="alarms" id="alarms"></div>
+    </div>
+  </div>
+  <div id="strip"><canvas id="cv"></canvas></div>
+</section>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+/* ---------- geometry ---------- */
+const OUTER = "M150 205 C110 225 100 290 118 345 C140 420 220 490 320 545 C410 500 480 420 492 335 C502 260 470 205 420 195 C380 188 350 200 320 205 C280 190 210 185 150 205 Z";
+$("outer").setAttribute("d", OUTER);
+$("outerClip").setAttribute("d", OUTER);
+$("aPulse").setAttribute("d", $("leadA").getAttribute("d"));
+$("vPulse").setAttribute("d", $("leadV").getAttribute("d"));
+const SA_PT = [158, 216], TIP_A = [238, 234], TIP_V = [300, 490], SEPT = [306, 360], ESC_PT = [420, 425];
+function breakMark(g, lead, frac) {
+  const p = lead.getPointAtLength(lead.getTotalLength() * frac);
+  g.innerHTML = `<circle cx="${p.x}" cy="${p.y}" r="9" fill="var(--surface)"/>` +
+    `<path d="M${p.x-9} ${p.y-6} l5 4 l-3 3 l6 3 M${p.x+9} ${p.y+6} l-5 -4 l3 -3 l-6 -3" stroke="var(--bad)" stroke-width="2.5" fill="none" stroke-linecap="round"/>`;
+}
+breakMark($("aBreak"), $("leadA"), 0.2);
+breakMark($("vBreak"), $("leadV"), 0.36);
+
+/* ---------- timing (firmware defaults) ---------- */
+const C = {
+  PR_S: 160, PR_P: 173,           // AS->VS and AP->VS with intact conduction
+  SAV: 190, PAV: 220, LRI: 1000, UTRI: 500, PVARP: 250, PVAB: 100, VRP: 250, VBLANK: 50, XTALK: 30,
+  A_REF: 250, V_REF: 300, ESC: 1700, // tissue refractory, ventricular escape ~35 bpm
+  MAG_FAST: 600, MAG: 705, ERI_I: 923, SAFE_I: 828, MOBITZ_N: 3,
+};
+const BASE = { sinus: 70, block: "none", aCap: true, aLead: true, vLead: true, device: true, battery: "ok", magnet: false };
+let cond = { ...BASE };
+
+function mode() {
+  if (!cond.device) return "OFF";
+  if (cond.battery === "safety") return "VVI";
+  if (cond.battery === "eri") return cond.magnet ? "VOO" : "VVI";
+  return cond.magnet ? "DOO" : "DDD";
+}
+const vviInterval = () => cond.battery === "safety" ? C.SAFE_I : C.ERI_I;
+function modeRate() {
+  const m = mode();
+  if (m === "OFF") return "";
+  if (m === "DDD") return "60 ppm";
+  if (m === "DOO") return S.magCount < 3 ? "100 ppm" : "85 ppm";
+  return cond.battery === "safety" ? "72.5 ppm" : "65 ppm";
+}
+
+/* ---------- simulation: 1 ms steps, run lazily up to display time ---------- */
+const S = { t: 0, nextSinus: 150, lastAdep: -1e9, lastVdep: -500, pendingV: null, mobitz: 0,
+  lastV: -500, av: null, lastAP: -1e9, lastVP: -1e9, lastAmark: -1e9, dooNextA: 0, dooV: null, magCount: 0, lastMode: "DDD" };
+let events = [];
+const last = {};
+const INTERESTING = new Set(["AS", "AR", "AP", "VS", "VR", "VP", "Adep", "Vdep", "nocap"]);
+
+function emit(e) {
+  e.t = S.t; e.mode = mode();
+  if (e.type === "Adep" && last.Adep) e.prev = last.Adep.t;
+  if (e.type === "Vdep" && last.Vdep) e.prev = last.Vdep.t;
+  last[e.type === "nocap" ? "nocap" + e.ch : e.type] = e;
+  events.push(e);
+  if (events.length > 800) events.splice(0, 300);
+  if (stepArmed && stepStop === null && INTERESTING.has(e.type)) stepStop = S.t + 140;
+  const m = explain(e);
+  if (m) pushLog(e, m);
+}
+
+function retime() {
+  if (cond.sinus <= 0) { S.nextSinus = Infinity; return; }
+  const iv = 60000 / cond.sinus;
+  S.nextSinus = isFinite(S.nextSinus) ? Math.min(S.nextSinus, S.t + iv) : S.t + Math.max(150, iv - (S.t - S.lastAdep));
+}
+
+function onModeChange(m) {
+  S.av = null;
+  if (m === "DOO") { S.dooNextA = S.t; S.dooV = null; S.magCount = 0; }
+}
+
+function tick() {
+  const t = S.t, m = mode();
+  if (m !== S.lastMode) { onModeChange(m); S.lastMode = m; }
+
+  // the heart
+  if (t >= S.nextSinus) {
+    emit({ type: "SA" });
+    if (t - S.lastAdep >= C.A_REF) atrialDep("sinus");
+    S.nextSinus = cond.sinus > 0 ? t + 60000 / cond.sinus : Infinity;
+  }
+  if (S.pendingV !== null && t >= S.pendingV) {
+    S.pendingV = null;
+    if (t - S.lastVdep >= C.V_REF) ventDep("conducted");
+  }
+  if (t - S.lastVdep >= C.ESC) ventDep("escape");
+
+  // the device
+  if (m === "DDD") {
+    if (S.av) {
+      const due = Math.max(S.av.start + (S.av.kind === "AP" ? C.PAV : C.SAV), S.lastV + C.UTRI);
+      if (t >= due) paceV();
+    } else if (t >= S.lastV + C.LRI - C.PAV) paceA();
+  } else if (m === "DOO") {
+    if (t >= S.dooNextA) { paceA(); S.dooV = t + C.PAV; S.dooNextA = t + (S.magCount++ < 3 ? C.MAG_FAST : C.MAG); }
+    if (S.dooV !== null && t >= S.dooV) { S.dooV = null; paceV(); }
+  } else if (m === "VVI" || m === "VOO") {
+    if (t >= S.lastV + vviInterval()) paceV();
+  }
+  S.t++;
+}
+
+function atrialDep(src) {
+  const t = S.t;
+  S.lastAdep = t;
+  if (src !== "sinus" && cond.sinus > 0) S.nextSinus = t + 60000 / cond.sinus;
+  let outcome = "conducted", pr = null;
+  if (cond.block === "third") outcome = "blocked";
+  else if (cond.block === "second" && ++S.mobitz % C.MOBITZ_N === 0) outcome = "dropped";
+  else { pr = src === "paced" ? C.PR_P : C.PR_S; S.pendingV = t + pr; }
+  emit({ type: "Adep", src, outcome, pr });
+  if (src !== "paced" && mode() === "DDD" && cond.aLead) {
+    if (t - S.lastV < C.PVAB) return;                       // blanked
+    if (S.av || t - S.lastV < C.PVARP) { emit({ type: "AR" }); return; }
+    S.av = { start: t, kind: "AS" }; S.lastAmark = t;
+    emit({ type: "AS" });
+  }
+}
+
+function ventDep(src) {
+  const t = S.t;
+  S.lastVdep = t;
+  emit({ type: "Vdep", src });
+  const m = mode();
+  if (src === "paced" || !(m === "DDD" || m === "VVI") || !cond.vLead) return;
+  if (t - S.lastVP < C.VBLANK) return;
+  if (m === "DDD" && t - S.lastAP < C.XTALK) return;
+  if (t - S.lastV < C.VRP) { emit({ type: "VR" }); return; }
+  const av = (m === "DDD" && S.lastAmark > S.lastV) ? t - S.lastAmark : null;
+  S.lastV = t; S.av = null;
+  emit({ type: "VS", av });
+}
+
+function paceA() {
+  const t = S.t;
+  S.lastAP = t; S.lastAmark = t;
+  if (mode() === "DDD") S.av = { start: t, kind: "AP" };
+  emit({ type: "AP" });
+  if (cond.aLead && cond.aCap && t - S.lastAdep >= C.A_REF) atrialDep("paced");
+  else emit({ type: "nocap", ch: "A", why: !cond.aLead ? "lead" : !cond.aCap ? "threshold" : "refractory" });
+}
+
+function paceV() {
+  const t = S.t, m = mode();
+  const av = ((m === "DDD" || m === "DOO") && S.lastAmark > S.lastV) ? t - S.lastAmark : null;
+  S.lastV = t; S.lastVP = t; S.av = null;
+  emit({ type: "VP", av });
+  if (cond.vLead && t - S.lastVdep >= C.V_REF) ventDep("paced");
+  else emit({ type: "nocap", ch: "V", why: !cond.vLead ? "lead" : "refractory" });
+}
+
+/* ---------- narration for the event log ---------- */
+function explain(e) {
+  const m = e.mode;
+  switch (e.type) {
+    case "AS": return "Atrial sense. P wave seen; the 190 ms sensed AV delay starts.";
+    case "AR": return "P wave in the atrial refractory period: noted, not tracked.";
+    case "AP": return m === "DOO" ? "Atrial pace. The magnet makes it pace without sensing."
+                                  : "Atrial pace. No P wave within the 780 ms VA interval.";
+    case "VS": return e.av !== null ? `Ventricular sense ${e.av} ms after the atrial event. Ventricular pace held back.`
+                                    : "Ventricular sense. The lower-rate timer restarts.";
+    case "VR": return "R wave in the ventricular refractory period: ignored.";
+    case "VP":
+      if (m === "DDD") return `Ventricular pace. The AV delay ran out after ${e.av} ms with no R wave.`;
+      if (m === "DOO" || m === "VOO") return "Ventricular pace, asynchronous: sensing is off.";
+      return `Ventricular pace. No R wave within ${vviInterval()} ms (${modeRate()}).`;
+    case "nocap": {
+      const ch = e.ch === "A" ? "Atrial" : "Ventricular";
+      if (e.why === "lead") return `${ch} pulse lost in the broken lead: no beat.`;
+      if (e.why === "threshold") return "Atrial pulse below the capture threshold: no beat.";
+      return `${ch} pulse fell on refractory tissue: no beat.`;
+    }
+    case "Adep":
+      if (e.outcome === "blocked") return "P wave blocked at the AV node (complete heart block).";
+      if (e.outcome === "dropped") return "P wave dropped at the AV node (Mobitz II, 1 in 3).";
+      if (m === "OFF" && e.src === "sinus") return "P wave from the SA node; it conducts to the ventricles.";
+      if (e.src === "sinus" && !cond.aLead && m === "DDD") return "P wave the device cannot see.";
+      return null;
+    case "Vdep":
+      return e.src === "escape" ? "Ventricular escape beat: the ventricles beat on their own, about 35 bpm." : null;
+  }
+  return null;
+}
+const CHIP = { AS: ["AS", "ca"], AR: ["AR", "cm"], AP: ["AP", "ca"], VS: ["VS", "cv"], VR: ["VR", "cm"], VP: ["VP", "cv"] };
+const logs = [];
+function pushLog(e, msg) {
+  let chip;
+  if (CHIP[e.type]) chip = CHIP[e.type];
+  else if (e.type === "nocap") chip = ["LOC", "cx"];
+  else if (e.type === "Adep") chip = ["P", e.outcome === "conducted" ? "ca" : "cx"];
+  else chip = ["ESC", "cx"];
+  logs.unshift({ t: e.t, chip, msg });
+  if (logs.length > 7) logs.length = 7;
+  $("log").innerHTML = logs.map(l =>
+    `<li><span class="lt">${(l.t / 1000).toFixed(2)}s</span><span class="chip ${l.chip[1]}">${l.chip[0]}</span><span>${l.msg}</span></li>`).join("");
+}
+
+/* ---------- stories ---------- */
+const STORIES = [
+  { name: "Pacing basics", steps: [
+    { title: "A healthy heart", cond: {},
+      body: "The SA node fires about 70 times a minute. The wave crosses the atria, waits at the AV node, then spreads through the ventricles. The pacemaker sees each P wave (AS) and each R wave (VS) 160 ms later, so it never paces." },
+    { title: "Complete heart block, no pacemaker", cond: { block: "third", device: false },
+      body: "The AV node stops conducting. The atria keep beating at 70, but the ventricles fall back on their own escape rhythm at about 35 bpm, out of step with the atria." },
+    { title: "Pacemaker on, in DDD", cond: { block: "third" },
+      body: "The device senses each P wave (AS) and starts a 190 ms sensed AV delay. No R wave arrives, so it paces the ventricle (VP). The ventricles follow the atria again, at the patient's own rate." },
+    { title: "Add sinus arrest", cond: { block: "third", sinus: 0 },
+      body: "Now the SA node is silent too. With no P wave inside the 780 ms VA interval, the device paces the atrium (AP), waits 220 ms and paces the ventricle (VP). That is 60 ppm, the programmed lower rate." },
+    { title: "Sinus arrest, AV conduction intact", cond: { sinus: 0 },
+      body: "The device paces the atrium and the heart conducts that beat itself. The R wave arrives 173 ms later, inside the 220 ms paced AV delay, so the ventricular pace is held back: AP, then VS." },
+    { title: "Mobitz II, 1 in 3 dropped", cond: { block: "second" },
+      body: "Two of every three P waves conduct. On the third the AV node drops the beat, and the device paces the ventricle 190 ms after that P wave. It fills in only the beat that was missing." },
+  ]},
+  { name: "Lead and capture faults", steps: [
+    { title: "Loss of atrial capture", cond: { sinus: 0, aCap: false },
+      body: "The atrial capture threshold has risen above the 2.5 V output. Each atrial pulse fires but the atrium does not respond, so nothing conducts and the device paces the ventricle 220 ms later." },
+    { title: "Output raised, capture restored", cond: { sinus: 0 },
+      body: "Raising the atrial amplitude to 3.5 V (<code>aamp 3500</code> on the programmer console) brings capture back: AP, then the heart's own R wave." },
+    { title: "Atrial lead fracture", cond: { aLead: false },
+      body: "The atrial lead breaks. The ADS1292R reports lead-off and the firmware raises a LEAD_OFF alarm. The device can no longer see P waves, and its atrial pulses go nowhere." },
+    { title: "Ventricular lead fracture in complete block", cond: { block: "third", vLead: false },
+      body: "The worst case: the patient depends on ventricular pacing and that lead is broken. The device keeps pacing, but no pulse reaches the heart, which drops back to its 35 bpm escape rhythm." },
+  ]},
+  { name: "Magnet, battery, Safety Mode", steps: [
+    { title: "Magnet applied", cond: { magnet: true },
+      body: "A magnet over the device trips its Hall sensor. It switches to DOO and paces both chambers with sensing off: three beats at 100 ppm, then 85 ppm. Paces that land just after the heart's own beats find refractory tissue and do nothing." },
+    { title: "Battery at ERI", cond: { block: "third", battery: "eri" },
+      body: "The cell has reached its elective replacement indicator (2.55 V). The device drops to single-chamber VVI at 65 ppm. The ventricles are still paced, but no longer in step with the atria." },
+    { title: "ACCOLADE Safety Mode", cond: { block: "third", battery: "safety" },
+      body: "A high-impedance cell sags under a telemetry burst and the supervisor resets the chip. The third reset latches Safety Mode: VVI at 72.5 ppm, 5.0 V at 1.0 ms, unipolar. The latch is permanent." },
+    { title: "Magnet in Safety Mode", cond: { block: "third", battery: "safety", magnet: true },
+      body: "Safety Mode turns magnet response off, so placing the magnet changes nothing. The device keeps pacing VVI at 72.5 ppm." },
+  ]},
+];
+let story = 0, stepIdx = 0;
+
+function renderStory() {
+  const st = STORIES[story], s = st.steps[stepIdx];
+  $("tabs").innerHTML = STORIES.map((x, i) =>
+    `<button class="tab" role="tab" aria-selected="${i === story}" data-i="${i}">${x.name}</button>`).join("");
+  $("stepNo").textContent = `Step ${stepIdx + 1} of ${st.steps.length}`;
+  $("stepTitle").textContent = s.title;
+  $("stepBody").innerHTML = s.body;
+  $("dots").innerHTML = st.steps.map((_, i) => `<i class="${i === stepIdx ? "on" : ""}"></i>`).join("");
+  $("prev").disabled = story === 0 && stepIdx === 0;
+  $("next").disabled = story === STORIES.length - 1 && stepIdx === st.steps.length - 1;
+}
+function applyStep() { setCond({ ...BASE, ...STORIES[story].steps[stepIdx].cond }); renderStory(); }
+function go(d) {
+  let s = story, i = stepIdx + d;
+  if (i < 0) { if (s === 0) return; s--; i = STORIES[s].steps.length - 1; }
+  if (i >= STORIES[s].steps.length) { if (s === STORIES.length - 1) return; s++; i = 0; }
+  story = s; stepIdx = i; applyStep();
+}
+$("tabs").addEventListener("click", e => { const b = e.target.closest(".tab"); if (b) { story = +b.dataset.i; stepIdx = 0; applyStep(); } });
+$("prev").onclick = () => go(-1);
+$("next").onclick = () => go(1);
+
+/* ---------- conditions ---------- */
+function setCond(c) { cond = c; retime(); syncControls(); }
+function change(key, val) { setCond({ ...cond, [key]: val }); toast(describe(key, val)); }
+function describe(key, v) {
+  switch (key) {
+    case "sinus": return v > 0 ? `SA node at ${v} bpm` : "Sinus arrest: the SA node stops";
+    case "block": return { none: "Normal AV conduction", second: "Mobitz II: 1 in 3 beats dropped", third: "Complete heart block" }[v];
+    case "aCap": return v ? "Atrial capture restored" : "Atrial capture threshold above output";
+    case "aLead": return v ? "Atrial lead repaired" : "Atrial lead fractured";
+    case "vLead": return v ? "Ventricular lead repaired" : "Ventricular lead fractured";
+    case "device": return v ? "Pacemaker on" : "Pacemaker off";
+    case "battery": return { ok: "Battery OK, device reset", eri: "Battery at ERI: VVI 65", safety: "Safety Mode latched: VVI 72.5" }[v];
+    case "magnet": return v ? (cond.battery === "safety" ? "Magnet placed: ignored in Safety Mode" : "Magnet placed: asynchronous pacing") : "Magnet removed";
+  }
+}
+const ACT = {
+  sa: () => change("sinus", cond.sinus > 0 ? 0 : 70),
+  av: () => change("block", { none: "second", second: "third", third: "none" }[cond.block]),
+  atrium: () => change("aCap", !cond.aCap),
+  alead: () => change("aLead", !cond.aLead),
+  vlead: () => change("vLead", !cond.vLead),
+  can: () => change("battery", { ok: "eri", eri: "safety", safety: "ok" }[cond.battery]),
+  magnet: () => change("magnet", !cond.magnet),
+};
+const HINT = {
+  sa: () => ["SA node", cond.sinus > 0 ? "Click to stop it (sinus arrest)" : "Click to restart it at 70 bpm"],
+  av: () => ["AV node", { none: "Click for 2nd-degree block (Mobitz II)", second: "Click for complete heart block", third: "Click to restore normal conduction" }[cond.block]],
+  atrium: () => ["Right atrium", cond.aCap ? "Click to raise the capture threshold above the pacing output" : "Click to restore atrial capture"],
+  alead: () => ["Atrial lead", cond.aLead ? "Click to fracture the lead" : "Click to repair the lead"],
+  vlead: () => ["Ventricular lead", cond.vLead ? "Click to fracture the lead" : "Click to repair the lead"],
+  can: () => ["Pacemaker", { ok: "Click to drain the battery to ERI", eri: "Click to latch ACCOLADE Safety Mode", safety: "Click to reset to a fresh device" }[cond.battery]],
+  magnet: () => ["Magnet", cond.magnet ? "Click to remove it" : "Click to place it over the device"],
+};
+
+const stage = $("stage"), tipEl = $("tip");
+document.querySelectorAll("[data-hit]").forEach(el => {
+  const k = el.dataset.hit;
+  el.setAttribute("tabindex", "0");
+  el.setAttribute("role", "button");
+  el.addEventListener("click", () => { ACT[k](); showTip(el, k); });
+  el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ACT[k](); } });
+  el.addEventListener("mouseenter", () => showTip(el, k));
+  el.addEventListener("mousemove", e => moveTip(e));
+  el.addEventListener("mouseleave", () => { tipEl.hidden = true; });
+  el.addEventListener("focus", () => el.setAttribute("aria-label", HINT[k]().join(". ")));
+});
+function showTip(el, k) { const [a, b] = HINT[k](); tipEl.innerHTML = `<b>${a}</b>${b}`; tipEl.hidden = false; }
+function moveTip(e) { const r = stage.getBoundingClientRect(); tipEl.style.left = (e.clientX - r.left) + "px"; tipEl.style.top = (e.clientY - r.top) + "px"; }
+
+let toastTimer;
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.opacity = 1; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.style.opacity = 0, 2400); }
+
+document.querySelectorAll(".seg[data-key]").forEach(seg => seg.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const k = seg.dataset.key, raw = b.dataset.val;
+  change(k, raw === "true" ? true : raw === "false" ? false : raw);
+}));
+$("sinus").addEventListener("input", e => change("sinus", +e.target.value));
+function syncControls() {
+  document.querySelectorAll(".seg[data-key]").forEach(seg => {
+    const v = String(cond[seg.dataset.key]);
+    seg.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.val === v));
+  });
+  $("sinus").value = cond.sinus;
+  $("sinusOut").textContent = cond.sinus > 0 ? `${cond.sinus} bpm` : "arrest";
+}
+$("btnReset").onclick = () => { setCond({ ...BASE }); toast("Patient reset: healthy, 70 bpm"); };
+
+/* ---------- playback ---------- */
+let T = 0, playing = !matchMedia("(prefers-reduced-motion: reduce)").matches, speed = 0.5;
+let stepArmed = false, stepStop = null, lastNow = performance.now();
+function syncPlay() {
+  $("play").textContent = playing && !stepArmed ? "Pause" : "Play";
+  document.querySelectorAll("#speeds button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.s === speed));
+}
+function togglePlay() { stepArmed = false; stepStop = null; playing = !playing; syncPlay(); }
+function step() { stepArmed = true; stepStop = null; playing = true; syncPlay(); }
+function setSpeed(s) { speed = s; syncPlay(); }
+$("play").onclick = togglePlay;
+$("step").onclick = step;
+$("speeds").addEventListener("click", e => { const b = e.target.closest("button"); if (b) setSpeed(+b.dataset.s); });
+
+function toggleLabels() { const on = $("labels").style.display === "none"; $("labels").style.display = on ? "" : "none"; $("btnLabels").setAttribute("aria-pressed", on); }
+$("btnLabels").onclick = toggleLabels;
+$("btnTheme").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  readColors();
+};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  if (k === " ") { e.preventDefault(); togglePlay(); }
+  else if (k === "s" || k === "S" || k === ".") step();
+  else if (k === "ArrowRight" || k === "PageDown") { e.preventDefault(); go(1); }
+  else if (k === "ArrowLeft" || k === "PageUp") { e.preventDefault(); go(-1); }
+  else if (k === "l" || k === "L") toggleLabels();
+  else if ("1234".includes(k) && k.length === 1) setSpeed([1, 0.5, 0.25, 0.1][+k - 1]);
+});
+
+/* ---------- heart rendering ---------- */
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = x => 0.5 - 0.5 * Math.cos(Math.PI * clamp(x));
+function contraction(a, delay, up, down) {
+  if (a < delay) return 0; a -= delay;
+  if (a < up) return ease(a / up); a -= up;
+  return a < down ? 1 - ease(a / down) : 0;
+}
+function scaleAbout(el, cx, cy, s) { el.setAttribute("transform", `translate(${cx} ${cy}) scale(${s}) translate(${-cx} ${-cy})`); }
+function wave(front, fill, e, origin, dur, R) {
+  const a = e ? T - e.t : 1e9;
+  if (a > 700) { front.setAttribute("opacity", 0); fill.setAttribute("opacity", 0); return; }
+  const p = clamp(a / dur), r = 6 + p * R;
+  for (const el of [front, fill]) { el.setAttribute("cx", origin[0]); el.setAttribute("cy", origin[1]); el.setAttribute("r", r); }
+  front.setAttribute("opacity", a < dur ? 0.95 : 0);
+  fill.setAttribute("opacity", a < dur ? 0.42 : Math.max(0, 0.42 * (1 - (a - dur) / 320)));
+}
+function flash(el, e, dur, rmax) {
+  const a = e ? T - e.t : 1e9;
+  if (a > dur) { el.setAttribute("opacity", 0); return; }
+  el.setAttribute("r", 4 + rmax * a / dur);
+  el.setAttribute("opacity", 1 - a / dur);
+}
+function pulse(el, e) {
+  const a = e ? T - e.t : 1e9, dur = 70;
+  if (a > dur) { el.setAttribute("opacity", 0); return; }
+  el.setAttribute("opacity", 1);
+  el.setAttribute("stroke-dashoffset", 0.1 - 1.1 * (a / dur));
+}
+function render() {
+  const eA = last.Adep, eV = last.Vdep;
+  wave($("aFront"), $("aFill"), eA, eA && eA.src === "paced" ? TIP_A : SA_PT, eA && eA.src === "paced" ? 120 : 90, 340);
+  wave($("vFront"), $("vFill"), eV, !eV || eV.src === "conducted" ? SEPT : eV.src === "paced" ? TIP_V : ESC_PT,
+       eV && eV.src === "conducted" ? 80 : 170, 360);
+  const ca = eA ? contraction(T - eA.t, 40, 80, 170) : 0;
+  const cv = eV ? contraction(T - eV.t, 40, 130, 230) : 0;
+  scaleAbout($("cavRA"), 212, 266, 1 - 0.12 * ca);
+  scaleAbout($("cavLA"), 396, 258, 1 - 0.12 * ca);
+  scaleAbout($("cavRV"), 228, 405, 1 - 0.13 * cv);
+  scaleAbout($("cavLV"), 396, 412, 1 - 0.16 * cv);
+
+  // SA node
+  const sa = last.SA ? T - last.SA.t : 1e9;
+  $("saNode").classList.toggle("silent", cond.sinus <= 0);
+  $("saHalo").setAttribute("r", 8 + clamp(sa / 220) * 20);
+  $("saHalo").setAttribute("opacity", sa < 220 ? 0.9 * (1 - sa / 220) : 0);
+
+  // AV node: glows while it holds a conducted beat, red cross on a blocked one
+  let glow = 0, x = 0;
+  if (eA) {
+    const a = T - eA.t;
+    if (eA.outcome === "conducted" && a >= 0 && a <= eA.pr) glow = 0.35 + 0.35 * Math.sin(a / 14);
+    if (eA.outcome !== "conducted" && a > 25 && a < 500) x = 1;
+  }
+  $("avHalo").setAttribute("opacity", glow);
+  $("avHalo").setAttribute("r", 10 + glow * 10);
+  $("avX").setAttribute("opacity", x);
+
+  // His bundle and branches on a conducted beat
+  const b = $("bundles");
+  if (eV && eV.src === "conducted" && T - eV.t < 320) {
+    const a = T - eV.t;
+    b.setAttribute("opacity", a < 50 ? 1 : 1 - (a - 50) / 270);
+    b.querySelectorAll("path").forEach(p => p.setAttribute("stroke-dashoffset", 1 - clamp(a / 50)));
+  } else b.setAttribute("opacity", 0);
+
+  // pacing
+  flash($("aFlash"), last.AP, 160, 22);
+  flash($("vFlash"), last.VP, 160, 24);
+  pulse($("aPulse"), last.AP);
+  pulse($("vPulse"), last.VP);
+  const nca = last.nocapA ? T - last.nocapA.t : 1e9, ncv = last.nocapV ? T - last.nocapV.t : 1e9;
+  $("aNoCap").setAttribute("opacity", nca < 450 ? 1 - nca / 450 : 0);
+  $("vNoCap").setAttribute("opacity", ncv < 450 ? 1 - ncv / 450 : 0);
+  $("aBreak").setAttribute("opacity", cond.aLead ? 0 : 1);
+  $("vBreak").setAttribute("opacity", cond.vLead ? 0 : 1);
+
+  // can
+  const m = mode();
+  $("canMode").textContent = m === "OFF" ? "OFF" : m;
+  $("canRate").textContent = cond.battery === "safety" ? "SAFETY" : modeRate();
+  const ap = last.AP ? T - last.AP.t : 1e9, vp = last.VP ? T - last.VP.t : 1e9;
+  $("canLed").setAttribute("fill", vp < 90 ? "var(--v)" : ap < 90 ? "var(--a)" : "var(--muted)");
+  const alarm = !cond.aLead || !cond.vLead || cond.battery !== "ok";
+  $("canBody").classList.toggle("alarm", alarm && Math.floor(performance.now() / 600) % 2 === 0);
+  const bf = $("battFill");
+  bf.setAttribute("width", { ok: 34, eri: 7, safety: 5 }[cond.battery]);
+  bf.setAttribute("fill", cond.battery === "ok" ? "var(--ok)" : "var(--bad)");
+  $("magnetG").style.transform = cond.magnet ? "translate(575px,92px)" : "translate(575px,205px)";
+  $("magHit").setAttribute("y", cond.magnet ? 62 : 175);
+  $("magLbl").style.display = cond.magnet ? "none" : "";
+}
+
+/* ---------- status bar ---------- */
+const prevTxt = {};
+function setTxt(id, s) { if (prevTxt[id] !== s) { $(id).textContent = s; prevTxt[id] = s; } }
+function renderStatus() {
+  setTxt("clock", `${(T / 1000).toFixed(1)} s heart time`);
+  const m = mode();
+  setTxt("tMode", m === "OFF" ? "Off" : `${m} ${modeRate().replace(" ppm", "")}`);
+  const rate = e => e && e.prev !== undefined && T - e.t < 2600 ? Math.round(60000 / (e.t - e.prev)) : "–";
+  setTxt("tV", String(rate(last.Vdep)));
+  setTxt("tA", String(rate(last.Adep)));
+  const lv = [last.VS, last.VP].filter(Boolean).sort((a, b) => b.t - a.t)[0];
+  setTxt("tAV", lv && lv.av != null ? `${lv.av} ms` : "–");
+  const al = [];
+  if (!cond.aLead) al.push(["LEAD_OFF A", ""]);
+  if (!cond.vLead) al.push(["LEAD_OFF V", ""]);
+  if (cond.battery === "eri") al.push(["ERI", ""]);
+  if (cond.battery === "safety") al.push(["SAFETY MODE", ""]);
+  if (cond.magnet) al.push(["MAGNET", "info"]);
+  const html = al.map(([t, c]) => `<span class="alarm ${c}">${t}</span>`).join("");
+  if (prevTxt.alarms !== html) { $("alarms").innerHTML = html; prevTxt.alarms = html; }
+}
+
+/* ---------- rhythm strip: surface ECG + marker channel ---------- */
+const canvas = $("cv"), ctx = canvas.getContext("2d");
+const WIN = 6000;
+let col = {};
+function readColors() {
+  requestAnimationFrame(() => {
+    const cs = getComputedStyle(document.documentElement);
+    for (const k of ["a", "v", "bad", "muted", "grid", "trace", "line", "ink"]) col[k] = cs.getPropertyValue("--" + k).trim();
+  });
+}
+readColors();
+const g = (x, mu, s) => Math.exp(-((x - mu) ** 2) / (2 * s * s));
+function shape(e, d) {
+  if (e.type === "Adep") return e.src === "paced" ? 0.13 * g(d, 55, 22) : 0.16 * g(d, 45, 16);
+  if (e.src === "conducted") return -0.1 * g(d, 8, 5) + 1.0 * g(d, 24, 7) - 0.28 * g(d, 42, 7) + 0.26 * g(d, 290, 45);
+  return 0.85 * g(d, 50, 20) - 0.42 * g(d, 105, 22) - 0.3 * g(d, 330, 55);
+}
+function drawStrip() {
+  const wrap = $("strip"), w = wrap.clientWidth, h = wrap.clientHeight, dpr = devicePixelRatio || 1;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const t0 = T - WIN, X = t => (t - t0) / WIN * w;
+  const base = h * 0.36, amp = h * 0.25, by = h * 0.74;
+
+  ctx.lineWidth = 1; ctx.strokeStyle = col.grid;
+  ctx.beginPath();
+  for (let t = Math.ceil(t0 / 200) * 200; t <= T; t += 200) { const x = Math.round(X(t)) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, by - 22); }
+  for (let y = 8; y < by - 22; y += 16) { ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); }
+  ctx.stroke();
+
+  const vis = events.filter(e => e.t > t0 - 700 && e.t <= T);
+  const tissue = vis.filter(e => e.type === "Adep" || e.type === "Vdep");
+  ctx.strokeStyle = col.trace; ctx.lineWidth = 1.7; ctx.lineJoin = "round";
+  ctx.beginPath();
+  for (let x = 0; x <= w; x++) {
+    const t = t0 + x / w * WIN;
+    let v = 0;
+    for (const e of tissue) { const d = t - e.t; if (d >= 0 && d < 650) v += shape(e, d); }
+    const y = base - v * amp;
+    x ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+
+  ctx.lineWidth = 2;
+  for (const e of vis) {
+    if (e.type !== "AP" && e.type !== "VP" || e.t < t0) continue;
+    const x = Math.round(X(e.t)) + 0.5;
+    ctx.strokeStyle = e.type === "AP" ? col.a : col.v;
+    ctx.beginPath(); ctx.moveTo(x, base - amp * 1.15); ctx.lineTo(x, base + amp * 0.3); ctx.stroke();
+  }
+
+  // marker channel
+  ctx.strokeStyle = col.line; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, by + 0.5); ctx.lineTo(w, by + 0.5); ctx.stroke();
+  ctx.font = '600 12px "IBM Plex Mono", ui-monospace, monospace';
+  ctx.textAlign = "center";
+  for (const e of vis) {
+    if (!CHIP[e.type] || e.t < t0) continue;
+    const x = X(e.t), atrial = e.type[0] === "A";
+    const c = e.type.endsWith("R") ? col.muted : atrial ? col.a : col.v;
+    ctx.strokeStyle = c; ctx.fillStyle = c;
+    ctx.beginPath(); ctx.moveTo(x, by); ctx.lineTo(x, atrial ? by - 7 : by + 7); ctx.stroke();
+    ctx.fillText(e.type, x, atrial ? by - 11 : by + 20);
+    if ((e.type === "VS" || e.type === "VP") && e.av != null) {
+      ctx.fillStyle = col.muted;
+      ctx.font = '11px "IBM Plex Mono", ui-monospace, monospace';
+      ctx.fillText(String(e.av), X(e.t - e.av / 2), by + 36);
+      ctx.font = '600 12px "IBM Plex Mono", ui-monospace, monospace';
+    }
+  }
+  // non-capture flags on the trace
+  ctx.fillStyle = col.bad; ctx.font = '600 11px "IBM Plex Mono", ui-monospace, monospace';
+  for (const e of vis) if (e.type === "nocap" && e.t >= t0) ctx.fillText("LOC", X(e.t), base - amp * 1.25);
+  ctx.textAlign = "left"; ctx.fillStyle = col.muted; ctx.font = '11px "IBM Plex Mono", ui-monospace, monospace';
+  ctx.fillText("surface ECG", 8, 14);
+  ctx.fillText("markers", 8, by - 11);
+}
+
+/* ---------- main loop ---------- */
+function frame(now) {
+  const dt = Math.min(now - lastNow, 100); lastNow = now;
+  if (playing) {
+    const target = T + dt * speed;
+    while (S.t <= target) { tick(); if (stepStop !== null && S.t > stepStop) break; }
+    T = stepStop !== null ? Math.min(target, stepStop) : target;
+    if (stepStop !== null && T >= stepStop) { playing = false; stepArmed = false; stepStop = null; syncPlay(); }
+  }
+  render(); drawStrip(); renderStatus();
+  requestAnimationFrame(frame);
+}
+
+applyStep();
+syncPlay();
+// show a little history at rest so the first frame is never empty
+while (S.t < 2400) tick();
+T = S.t - 1;
+requestAnimationFrame(frame);
+</script>
