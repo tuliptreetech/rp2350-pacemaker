@@ -6,12 +6,19 @@ measured from the telemetry markers (tty1), the console (tty0), the patient's ow
 the wand.
 
 Every test starts its own session of the project (a new device and a new patient, power-on defaults)
-and stops it at the end, so the session you demo from is never touched. Run from the repo root, with
-emerson-server up on firmware/firmware.bin (`emerson load`) and a session of yours started:
+and stops it at the end, so the session you demo from is never touched, and none is needed. Run from
+the repo root, with emerson-server up on firmware/firmware.bin (`emerson load`):
 
-    emerson run scenarios/test_demo_pacemaker.py -q                  # every condition
-    emerson run scenarios/test_demo_pacemaker.py -q -m "not slow"    # skip rate response and the finale
-    emerson run scenarios/test_demo_pacemaker.py -q -s -k magnet     # one, printing what it measured
+    scenarios/demo_tests.sh -q                          # every condition
+    scenarios/demo_tests.sh -q -m "not slow"            # skip rate response and the finale
+    scenarios/demo_tests.sh -q -s -k magnet             # one, printing what it measured
+    scenarios/demo_tests.sh -q --jobs 4                 # 4 groups at once, a session each
+
+demo_tests.sh copies the scripts into the server container and runs them there with `emerson exec`.
+`emerson run scenarios/test_demo_pacemaker.py ...` works as well, but only while a session of yours exists.
+
+`--jobs N` splits the selected tests into N groups and runs each in its own pytest process; it is this
+script's option, not pytest-xdist's `-n`.
 
 Windows are guest (heart) time, not wall time: the emulator runs at ~0.23x wall on Apple Silicon.
 """
@@ -302,6 +309,10 @@ def test_5_pvcs_are_sensed_and_counted(dev):
     h0 = dev.heart_state()
     at = dev.mark()
     for _ in range(n):
+        # Right after a sinus beat, so the PVC lands mid-cycle (the ventricle is excitable again ~300 ms
+        # later, the next P wave is ~700 ms later). At a random moment it can fall in the AV delay after
+        # a P wave, and the device rightly takes it for that P wave's conducted beat.
+        assert dev.wait_for(r"^VS t=\S+ AV=", dev.mark(), guest_timeout=3.0), "no sinus beat to time the PVC by"
         dev.heart.invoke_action("inject_pvc", "")
         dev.wait_guest(2.0)
     h1 = dev.heart_state()
@@ -502,7 +513,89 @@ def test_finale_accolade_safety_mode_latches():
     assert accolade_safety_mode.main(["--no-harm", "--host", HOST]) == 0
 
 
+# --- Entry point ----------------------------------------------------------------------------------------
+
+# No cache: `emerson run` mounts the repo, and .pytest_cache would land in it.
+PYTEST_ARGS = ["-p", "no:cacheprovider", "-o", "markers=slow: minutes of wall time"]
+SLOW_WEIGHT = 4  # a slow test takes about as long as four of the others
+
+
+def collect(args):
+    """The node ids pytest would run with `args` (after -k and -m), and whether each is slow."""
+    import contextlib
+    import io
+
+    class Collector:
+        items = []
+
+        def pytest_collection_finish(self, session):
+            self.items = [(item.nodeid, item.get_closest_marker("slow") is not None) for item in session.items]
+
+    c = Collector()
+    with contextlib.redirect_stdout(io.StringIO()):
+        code = pytest.main([__file__, "--collect-only", "-q", *PYTEST_ARGS, *args], plugins=[c])
+    if code not in (0, 5):  # 5: nothing collected
+        sys.exit(f"collection failed (pytest exit {code})")
+    return c.items
+
+
+def split(items, jobs):
+    """Groups of node ids with about equal weight: the slow tests are spread out first."""
+    groups = [[0, []] for _ in range(jobs)]
+    for nodeid, slow in sorted(items, key=lambda x: not x[1]):
+        g = min(groups, key=lambda g: g[0])
+        g[0] += SLOW_WEIGHT if slow else 1
+        g[1].append(nodeid)
+    return [ids for _, ids in groups if ids]
+
+
+def run_parallel(jobs, args):
+    """Each group in its own pytest process, so in its own sessions at the same time. The emulator slows
+    under the load, but every window is guest time, so only the wall time changes."""
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    groups = split(collect(args), jobs)
+    if not groups:
+        print("no tests selected")
+        return 5
+    t0 = time.monotonic()
+    print(f"running {sum(map(len, groups))} tests in {len(groups)} parallel groups", flush=True)
+
+    def run(ids):
+        # Only the node ids: with the file as well, pytest would run every test in each group.
+        p = subprocess.run([sys.executable, "-m", "pytest", *PYTEST_ARGS, *args, *ids],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        return ids, p.returncode, p.stdout, time.monotonic() - t0
+
+    results = []
+    with ThreadPoolExecutor(len(groups)) as pool:
+        for fut in as_completed([pool.submit(run, ids) for ids in groups]):
+            ids, code, out, wall = fut.result()
+            results.append((ids, code))
+            names = ", ".join(i.split("::")[-1] for i in ids)
+            print(f"\n===== group done after {wall:.0f} s (exit {code}): {names}\n{out.rstrip()}", flush=True)
+    failed = [ids for ids, code in results if code != 0]
+    print(f"\n{len(groups) - len(failed)}/{len(groups)} groups passed in {time.monotonic() - t0:.0f} s wall")
+    return max(code for _, code in results)
+
+
+def main(argv):
+    """`--jobs N` (or `-j N`) runs the selected tests in N parallel groups; every other argument goes to
+    pytest as it is."""
+    jobs, args = 1, []
+    it = iter(argv)
+    for a in it:
+        if a in ("-j", "--jobs"):
+            jobs = int(next(it))
+        elif a.startswith("--jobs="):
+            jobs = int(a.split("=", 1)[1])
+        else:
+            args.append(a)
+    if jobs > 1:
+        return run_parallel(jobs, args)
+    return pytest.main([__file__, *PYTEST_ARGS, *args])
+
+
 if __name__ == "__main__":
-    # No cache: `emerson run` mounts the repo, and .pytest_cache would land in it.
-    sys.exit(pytest.main([__file__, "-p", "no:cacheprovider", "-o", "markers=slow: minutes of wall time",
-                          *sys.argv[1:]]))
+    sys.exit(main(sys.argv[1:]))
