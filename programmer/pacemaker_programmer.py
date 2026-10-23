@@ -17,6 +17,8 @@ ends it on END or when the link is lost.
     python3 pacemaker_programmer.py --clear            # ...then clear diagnostics
     python3 pacemaker_programmer.py --html report.html
     python3 pacemaker_programmer.py --live             # live EGM + markers in a browser
+    python3 pacemaker_programmer.py --live --battery-probe  # ...and the cell's rail and current at /battery
+    python3 pacemaker_programmer.py --battery-probe    # the cell alone: no wand, no session
     python3 pacemaker_programmer.py --link communicator  # wandless, over the radio
     python3 pacemaker_programmer.py --upgrade v2.04    # install the battery-test firmware level, then interrogate
 
@@ -34,6 +36,7 @@ The wire protocol and the store's layout are the firmware's (firmware/main.c,
 """
 
 import argparse
+import collections
 import datetime as dt
 import html
 import json
@@ -41,6 +44,7 @@ import os
 import queue
 import threading
 import random
+import re
 import struct
 import sys
 import time
@@ -623,40 +627,61 @@ def parse_stream(payload, uv_per_lsb):
 
 
 class Broadcast:
-    """Fan events out to every connected page; a page that falls behind
-    loses events rather than holding the others up."""
+    """Fan events out to every connected page, each only the events it asked
+    for; a page that falls behind loses events rather than holding the
+    others up."""
+
+    # The latest of each of these is sent first to every page that connects:
+    # the session's hello, and the battery probe's.
+    STICKY = ("hello", "probe")
+    # And the recent history of these, as one `<event>_backlog` list, so a
+    # page opened (or reloaded) late still has it: the battery probe's
+    # samples, about five minutes of them at its default rate.
+    BACKLOG = {"battery": 6000}
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.queues = set()
-        self.hello = None  # sent first to every page that connects
+        self.queues = {}  # queue -> the events its page wants, or None for all
+        self.sticky = {}
+        self.backlog = {event: collections.deque(maxlen=n) for event, n in self.BACKLOG.items()}
 
-    def subscribe(self):
+    def subscribe(self, events=None):
         q = queue.Queue(maxsize=256)
         with self.lock:
-            self.queues.add(q)
-            if self.hello:
-                q.put_nowait(self.hello)
+            self.queues[q] = events
+            for event, message in self.sticky.items():
+                if events is None or event in events:
+                    q.put_nowait(message)
+            for event, items in self.backlog.items():
+                if items and (events is None or event in events):
+                    q.put_nowait(f"event: {event}_backlog\ndata: {json.dumps(list(items))}\n\n".encode())
         return q
 
     def unsubscribe(self, q):
         with self.lock:
-            self.queues.discard(q)
+            self.queues.pop(q, None)
 
     def send(self, event, data):
         message = f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
-        if event == "hello":
-            self.hello = message
         with self.lock:
-            for q in list(self.queues):
+            if event in self.STICKY:
+                self.sticky[event] = message
+            if event in self.backlog:
+                self.backlog[event].append(data)
+            for q, events in self.queues.items():
+                if events is not None and event not in events:
+                    continue
                 try:
                     q.put_nowait(message)
                 except queue.Full:
                     pass
 
 
-def serve_live_view(broadcast, port, bind="127.0.0.1"):
-    """A local page (live_view.html) fed by Server-Sent Events at /events.
+def serve_live_view(broadcast, port, bind="127.0.0.1", pages=None):
+    """Local pages fed by Server-Sent Events at /events: `pages` maps each
+    path to its file beside this one (default: the live EGM, live_view.html,
+    at /). `/events?events=a,b` streams only those events (and their
+    backlogs), so each page gets what it draws.
 
     Loopback by default: the page streams patient telemetry and has no
     authentication. `emerson run` binds 0.0.0.0 (EMERSON_BIND_HOST), because
@@ -664,25 +689,31 @@ def serve_live_view(broadcast, port, bind="127.0.0.1"):
     loopback -- and publishes it on the host's loopback only."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    page = Path(__file__).with_name("live_view.html").read_bytes()
+    from urllib.parse import parse_qs, urlsplit
+
+    pages = {path: Path(__file__).with_name(name).read_bytes()
+             for path, name in (pages or {"/": "live_view.html"}).items()}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def do_GET(self):
-            if self.path == "/":
+            url = urlsplit(self.path)
+            if url.path in pages:
+                page = pages[url.path]
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(page)))
                 self.end_headers()
                 self.wfile.write(page)
-            elif self.path == "/events":
+            elif url.path == "/events":
+                wanted = parse_qs(url.query).get("events")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
                 self.end_headers()
-                q = broadcast.subscribe()
+                q = broadcast.subscribe(set(",".join(wanted).split(",")) if wanted else None)
                 try:
                     while True:
                         try:
@@ -762,6 +793,96 @@ def live(session, broadcast, now=None, stop=None):
             print("warning: the device did not confirm the end of the session; it will time out by itself",
                   file=sys.stderr)
     return gaps["count"]
+
+
+# --- Bench battery probe ---------------------------------------------------
+#
+# Not telemetry: the emulator's own view of the cell, read straight from the
+# models (/board/battery, /board/supervisor) the way a bench supply's meter
+# would, so it keeps reading while the device is held in reset and shows the
+# load current the board has no part to measure. Its page is battery_view.html
+# (/battery), its own window beside the live EGM's, labelled as a probe.
+#
+# The rail's dips come from the cell's min-hold, which every sample restarts
+# (`reset_min`): a sag far shorter than the poll interval still shows. That
+# min-hold is shared, so while the probe runs, anything else reading it --
+# scenarios/accolade_safety_mode.py's "rail minimum" at each reset -- sees
+# only the time since the probe's last sample.
+
+BATTERY_PROBE_HZ = 20.0
+# The firmware's thresholds on its loaded VBAT reading (firmware/main.c ERI_MV, EOL_MV).
+ERI_V = 2.550
+EOL_V = 2.300
+# The draws on the rail that are the radio's: the ZL70102, its load switch,
+# and `set_draw radio`'s stand-in.
+RADIO_DRAWS = ("zl70102", "radio_vsup", "radio")
+
+RAIL_RE = re.compile(r"rail ([0-9.]+) V at guest ([0-9.]+) s; draws: (.*?); min ([0-9.]+) V")
+DRAW_RE = re.compile(r"(\w+) ([0-9.]+) uA")
+CELL_RE = {"dod": re.compile(r"([0-9.]+)% discharged"), "rint": re.compile(r"R_int ([0-9.e+]+) ohm"),
+           "load": re.compile(r"load ([0-9.]+) uA"), "pacing": re.compile(r"\(([0-9.]+) uA pacing\)")}
+DEFECT_RE = re.compile(r"defect ([^;]+)")
+SUPERVISOR_RE = re.compile(r"VIT- ([0-9.]+) V \(\+([0-9.]+) mV hysteresis\), RESET (high|low)[^;]*; (\d+) resets")
+
+
+def probe_sample(battery, supervisor):
+    """One reading of the cell and its supervisor, or None if either answered
+    in a form this does not know."""
+    rail = RAIL_RE.search(battery.invoke_action("get_rail", ""))
+    battery.invoke_action("reset_min", "")
+    cell = battery.invoke_action("get_status", "")
+    sup = SUPERVISOR_RE.search(supervisor.invoke_action("get_status", ""))
+    if not rail or not sup:
+        return None
+    draws = {name: float(ua) for name, ua in DRAW_RE.findall(rail.group(3))}
+    sample = dict(t=float(rail.group(2)), v=float(rail.group(1)), vmin=float(rail.group(4)),
+                  radio=round(sum(ua for name, ua in draws.items() if name in RADIO_DRAWS), 2), draws=draws,
+                  reset_low=sup.group(3) == "low", resets=int(sup.group(4)),
+                  vit=float(sup.group(1)), hyst=float(sup.group(2)) / 1000)
+    for key, rx in CELL_RE.items():
+        m = rx.search(cell)
+        sample[key] = float(m.group(1)) if m else None
+    defect = DEFECT_RE.search(cell)
+    sample["defect"] = defect.group(1) if defect else None
+    return sample
+
+
+def battery_probe(machine, broadcast, hz=BATTERY_PROBE_HZ, stop=None):
+    """Sample the cell `hz` times a wall second and pass each reading to
+    `broadcast` as a `battery` event, until `stop` is set (or Ctrl+C)."""
+    stop = stop or threading.Event()
+    battery = machine.get_device("/board/battery")
+    supervisor = machine.get_device("/board/supervisor")
+    period = 1.0 / hz
+    hello = None
+    next_t = time.monotonic()
+    while not stop.is_set():
+        sample = probe_sample(battery, supervisor)
+        if sample:
+            limits = dict(hz=hz, vit=sample.pop("vit"), hyst=sample.pop("hyst"), eri=ERI_V, eol=EOL_V)
+            if limits != hello:
+                broadcast.send("probe", limits)
+                hello = limits
+            broadcast.send("battery", sample)
+        next_t = max(next_t + period, time.monotonic())
+        stop.wait(next_t - time.monotonic())
+
+
+def start_battery_probe(args, broadcast, stop):
+    """battery_probe on a thread with its own connection to the session, so
+    it never waits on the telemetry session's broker reads."""
+    import emerson
+
+    def run():
+        try:
+            with emerson.attach_session(args.host, args.project, args.session) as machine:
+                battery_probe(machine, broadcast, args.probe_hz, stop)
+        except Exception as err:  # the session ended under it; the telemetry side reports its own errors
+            print(f"battery probe stopped: {err}", file=sys.stderr)
+
+    thread = threading.Thread(target=run, name="battery-probe", daemon=True)
+    thread.start()
+    return thread
 
 
 def parse_egm(raw):
@@ -1246,6 +1367,13 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=60.0, help="seconds to wait for each response batch")
     p.add_argument("--live", action="store_true",
                    help="stream the live electrogram and markers to a local page instead of interrogating")
+    p.add_argument("--battery-probe", action="store_true",
+                   help="serve a page at /battery of the cell's rail voltage and load current, read straight from "
+                        "the emulator's battery model: a bench probe, not telemetry, so it keeps reading while the "
+                        "device is in reset. With --live it sits beside the EGM page (/) for a window of its own; "
+                        "without, no wand is placed")
+    p.add_argument("--probe-hz", type=float, default=BATTERY_PROBE_HZ,
+                   help="battery probe samples per wall second (default: %(default)s)")
     p.add_argument("--port", type=int, default=8765, help="the live page's port (default: %(default)s)")
     p.add_argument("--bind", default=os.environ.get("EMERSON_BIND_HOST", "127.0.0.1"), metavar="ADDR",
                    help="the address the live page listens on (default: EMERSON_BIND_HOST, else %(default)s)")
@@ -1255,16 +1383,37 @@ def main(argv=None):
 
     try:
         with emerson.attach_session(args.host, args.project, args.session) as machine:
+            if args.battery_probe and not args.live:
+                # The probe alone: no wand, no telemetry session.
+                broadcast = Broadcast()
+                server = serve_live_view(broadcast, args.port, args.bind,
+                                         {"/": "battery_view.html", "/battery": "battery_view.html"})
+                print(f"battery probe: http://localhost:{args.port}/battery  (Ctrl+C to stop)", flush=True)
+                try:
+                    battery_probe(machine, broadcast, args.probe_hz)
+                except KeyboardInterrupt:
+                    pass
+                finally:
+                    server.shutdown()
+                return 0
             link = (CommunicatorLink(machine, await_implant_s=args.await_implant)
                     if args.link == "communicator" else WandLink(machine))
             try:
                 if args.live:
                     broadcast = Broadcast()
-                    server = serve_live_view(broadcast, args.port, args.bind)
-                    print(f"live telemetry: http://localhost:{args.port}/  (Ctrl+C to end the session)")
+                    pages = {"/": "live_view.html"}
+                    if args.battery_probe:
+                        pages["/battery"] = "battery_view.html"
+                    server = serve_live_view(broadcast, args.port, args.bind, pages)
+                    stop_probe = threading.Event()
+                    if args.battery_probe:
+                        start_battery_probe(args, broadcast, stop_probe)
+                        print(f"battery probe: http://localhost:{args.port}/battery", flush=True)
+                    print(f"live telemetry: http://localhost:{args.port}/  (Ctrl+C to end the session)", flush=True)
                     try:
                         live(Session(link, timeout_s=args.timeout), broadcast)
                     finally:
+                        stop_probe.set()
                         server.shutdown()
                     return 0
                 report = interrogate(Session(link, timeout_s=args.timeout), clear=args.clear,

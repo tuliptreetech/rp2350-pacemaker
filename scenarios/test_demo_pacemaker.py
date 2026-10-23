@@ -513,6 +513,21 @@ def test_finale_accolade_safety_mode_latches():
     assert accolade_safety_mode.main(["--no-harm", "--host", HOST]) == 0
 
 
+@pytest.mark.slow
+def test_finale_short_one_communicator_connect_latches():
+    """The finale's short form: one communicator connect on the defective cell resets it, the firmware's
+    retries reset it twice more, and it latches; the same checks, plus the console and the wand."""
+    import accolade_communicator
+    assert accolade_communicator.main(["--host", HOST]) == 0
+
+
+@pytest.mark.slow
+def test_finale_short_healthy_connect_completes():
+    """The short form's control: the same connect on a healthy cell links, and nothing resets."""
+    import accolade_communicator
+    assert accolade_communicator.main(["--healthy", "--host", HOST]) == 0
+
+
 # --- Entry point ----------------------------------------------------------------------------------------
 
 # No cache: `emerson run` mounts the repo, and .pytest_cache would land in it.

@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Battery Probe</title>
+<!-- Served by pacemaker_programmer.py --battery-probe at /battery: the cell's
+     rail voltage and load current, read straight from the emulator's battery
+     model (/board/battery, /board/supervisor) and pushed here as Server-Sent
+     Events (`probe`, `battery`, `battery_backlog`). A bench probe, not
+     telemetry: it keeps reading while the device is held in reset. The live
+     EGM is a separate page (live_view.html, at /), so the two can sit in
+     their own windows. -->
+<style>
+:root { --bg:#ffffff; --fg:#1d232b; --muted:#5f6b7a; --line:#d9dee5; --panel:#f5f7fa;
+  --ok:#16794a; --warn:#b45309; --bad:#b91c1c; --rail:#0d9488; --cur:#7c3aed; }
+@media (prefers-color-scheme: dark) { :root { --bg:#14181d; --fg:#e6e9ee; --muted:#9aa6b4; --line:#2c333c;
+  --panel:#1b2027; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --rail:#11a394; --cur:#9b7bf0; } }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin:0; background:var(--bg); color:var(--fg); display:flex; flex-direction:column;
+  font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+header { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 24px; padding:14px 16px 10px;
+  border-bottom:1px solid var(--line); }
+h1 { font-size:18px; margin:0; font-weight:600; }
+.muted { color:var(--muted); }
+.tiles { display:flex; flex-wrap:wrap; gap:10px; padding:12px 16px 0; }
+.tile { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 12px; min-width:110px; }
+.tile .k { color:var(--muted); font-size:12px; }
+.tile .v { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; }
+.tile .v small { font-size:13px; font-weight:500; color:var(--muted); }
+.ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:6px; }
+.dot.live { background:var(--ok); } .dot.down { background:var(--bad); }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; margin-left:auto; align-self:center; }
+.seg button { background:var(--panel); color:var(--fg); border:0; padding:3px 10px; cursor:pointer; font:inherit; font-size:13px; }
+.seg button + button { border-left:1px solid var(--line); }
+.seg button[aria-pressed="true"] { background:var(--fg); color:var(--bg); }
+#pstrip { flex:1; min-height:320px; position:relative; margin:12px 16px 16px; touch-action:none; }
+canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
+.tip { position:absolute; pointer-events:none; background:var(--panel); border:1px solid var(--line); border-radius:6px;
+  padding:6px 9px; font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap;
+  box-shadow:0 2px 10px rgba(0,0,0,.15); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Battery probe</h1>
+  <span class="muted"><span id="dot" class="dot"></span><span id="status">connecting…</span></span>
+  <span class="muted">read from the emulator's cell model (/board/battery), not from the device, so it keeps reading through resets</span>
+  <div class="seg" role="group" aria-label="Time window">
+    <button data-win="10" aria-pressed="false">10 s</button><button data-win="60" aria-pressed="true">60 s</button><button data-win="300" aria-pressed="false">5 min</button>
+  </div>
+</header>
+<div class="tiles">
+  <div class="tile"><div class="k">Rail</div><div class="v"><span id="p-rail">–</span> <small>V</small></div></div>
+  <div class="tile"><div class="k">Lowest in window</div><div class="v"><span id="p-low">–</span> <small>V</small></div></div>
+  <div class="tile"><div class="k">Load</div><div class="v" id="p-load">–</div></div>
+  <div class="tile"><div class="k">Radio</div><div class="v" id="p-radio">–</div></div>
+  <div class="tile"><div class="k">Discharged</div><div class="v"><span id="p-dod">–</span> <small>%</small></div></div>
+  <div class="tile"><div class="k">R<sub>int</sub></div><div class="v"><span id="p-rint">–</span> <small>Ω</small></div></div>
+  <div class="tile"><div class="k">Supervisor</div><div class="v" id="p-sup">–</div></div>
+</div>
+<div id="pstrip"><canvas id="pc" role="img" aria-label="Rail voltage and load current over guest time"></canvas><div id="tip" class="tip" hidden></div></div>
+<script>
+"use strict";
+// Two panels on one guest-time axis: the rail (V) with its dips, and the load
+// current (log scale) with the radio's share. Supervisor resets shade both.
+
+const PROBE_KEEP_S = 300;    // the widest window
+const PROBE_MAX = 40000;     // samples kept, whatever the guest/wall ratio
+const $ = id => document.getElementById(id);
+const pcanvas = $("pc"), pctx = pcanvas.getContext("2d");
+let probe = null;            // the probe's hello: {hz, vit, hyst, eri, eol}
+let batt = [];               // samples, oldest first: {t, v, vmin, load, radio, pacing, reset_low, resets, ...}
+let windowS = 60;            // guest seconds across the strip
+let hoverX = null;           // the pointer over the strip, or null
+let pw = 0, ph = 0, dpr = 1;
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function fmtI(ua) {
+  if (ua == null) return "–";
+  if (ua >= 1000) return `${(ua / 1000).toFixed(ua >= 10000 ? 1 : 2)} mA`;
+  return `${ua.toFixed(ua >= 100 ? 0 : 1)} µA`;
+}
+
+
+function presize() {
+  const r = $("pstrip").getBoundingClientRect();
+  pw = r.width; ph = r.height;
+  pcanvas.width = Math.round(pw * dpr); pcanvas.height = Math.round(ph * dpr);
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// The first sample at or after guest time t.
+function firstAt(t) {
+  let lo = 0, hi = batt.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (batt[mid].t < t) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+
+function addBattery(s) {
+  if (batt.length && s.t < batt[batt.length - 1].t) batt = [];   // the session was reset: a new device
+  batt.push(s);
+  const drop = Math.max(firstAt(s.t - PROBE_KEEP_S - 1), batt.length - PROBE_MAX);
+  if (drop > 0) batt.splice(0, drop);
+}
+
+function showBattery(s) {
+  $("p-rail").textContent = s.v.toFixed(3);
+  $("p-rail").parentElement.className = "v " + (s.v < probe.vit ? "bad" : s.v < probe.eri ? "warn" : "");
+  let low = Infinity;
+  for (let i = firstAt(s.t - windowS); i < batt.length; i++) low = Math.min(low, batt[i].vmin);
+  $("p-low").textContent = low.toFixed(3);
+  $("p-low").parentElement.className = "v " + (low < probe.vit ? "bad" : low < probe.eri ? "warn" : "");
+  $("p-load").textContent = fmtI(s.load);
+  $("p-radio").textContent = fmtI(s.radio);
+  $("p-dod").textContent = s.dod == null ? "–" : s.dod.toFixed(2);
+  $("p-rint").textContent = s.rint == null ? "–" : s.rint >= 1e5 ? s.rint.toExponential(1) : Math.round(s.rint);
+  $("p-sup").textContent = `${s.reset_low ? "RESET" : "run"} · ${s.resets}`;
+  $("p-sup").className = "v " + (s.reset_low ? "bad" : s.resets ? "warn" : "ok");
+}
+
+function niceStep(span, target) {
+  const raw = span / target, mag = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map(k => k * mag).find(k => k >= raw);
+}
+
+function drawProbe() {
+  if (!probe || !pw) return;
+  const c = pctx;
+  c.clearRect(0, 0, pw, ph);
+  const left = 58, right = 10, top = 22, mid = 34, bottom = 22;
+  const hAll = ph - top - mid - bottom, hV = hAll * 0.58, hI = hAll - hV;
+  const yV0 = top, yI0 = top + hV + mid;
+  const muted = css("--muted"), line = css("--line"), fg = css("--fg"), bad = css("--bad"), warn = css("--warn");
+  const rail = css("--rail"), cur = css("--cur");
+  const tEnd = batt.length ? batt[batt.length - 1].t : windowS, t0 = tEnd - windowS;
+  const X = t => left + (t - t0) / windowS * (pw - left - right);
+  const vis = batt.slice(Math.max(0, firstAt(t0) - 1));
+
+  // Scales. Voltage: always room for ERI and EOL; current: log, decades from 1 µA.
+  let vLo = probe.eol - 0.08, vHi = probe.eri + 0.08, iHi = 100;
+  for (const s of vis) {
+    vLo = Math.min(vLo, s.vmin - 0.02); vHi = Math.max(vHi, s.v + 0.02);
+    iHi = Math.max(iHi, s.load * 1.5);
+  }
+  const vStep = niceStep(vHi - vLo, 5);
+  vLo = Math.floor(vLo / vStep) * vStep; vHi = Math.ceil(vHi / vStep) * vStep;
+  const YV = v => yV0 + (vHi - v) / (vHi - vLo) * hV;
+  const decades = Math.ceil(Math.log10(iHi));
+  const YI = ua => yI0 + hI - Math.log10(Math.max(ua, 1)) / decades * hI;
+
+  c.font = "11px system-ui, sans-serif"; c.lineWidth = 1;
+
+  // Time the supervisor held the chip in reset, across both panels.
+  c.fillStyle = bad; c.globalAlpha = 0.12;
+  for (let i = 1; i < vis.length; i++)
+    if (vis[i].reset_low) c.fillRect(X(vis[i - 1].t), yV0, X(vis[i].t) - X(vis[i - 1].t) + 0.5, yI0 + hI - yV0);
+  c.globalAlpha = 1;
+
+  // Grids and axis labels: recessive.
+  c.strokeStyle = line; c.fillStyle = muted; c.textAlign = "right";
+  for (let v = vLo; v <= vHi + 1e-9; v += vStep) {
+    const y = Math.round(YV(v)) + 0.5;
+    c.beginPath(); c.moveTo(left, y); c.lineTo(pw - right, y); c.stroke();
+    c.fillText(`${v.toFixed(vStep < 0.1 ? 2 : 1)} V`, left - 6, y + 4);
+  }
+  const iLabels = ["1 µA", "10 µA", "100 µA", "1 mA", "10 mA", "100 mA", "1 A"];
+  for (let d = 0; d <= decades; d++) {
+    const y = Math.round(YI(10 ** d)) + 0.5;
+    c.beginPath(); c.moveTo(left, y); c.lineTo(pw - right, y); c.stroke();
+    c.fillText(iLabels[d] ?? `1e${d} µA`, left - 6, y + 4);
+  }
+  const tStep = niceStep(windowS, 6);
+  c.textAlign = "center";
+  for (let t = Math.ceil(t0 / tStep) * tStep; t <= tEnd + 1e-9; t += tStep) {
+    if (t < 0) continue;
+    const x = Math.round(X(t)) + 0.5;
+    c.beginPath(); c.moveTo(x, yV0); c.lineTo(x, yI0 + hI); c.stroke();
+    c.fillText(`${+t.toFixed(3)} s`, x, ph - 6);
+  }
+
+  // Panel titles; the current panel's legend beside its title.
+  c.textAlign = "left"; c.fillStyle = fg; c.font = "600 12px system-ui, sans-serif";
+  c.fillText("Rail voltage", left, yV0 - 8);
+  c.fillText("Load current (log)", left, yI0 - 8);
+  c.font = "11px system-ui, sans-serif"; c.fillStyle = muted;
+  c.textAlign = "left"; c.fillText("guest time", 0, ph - 6);
+  const lgX = left + c.measureText("Load current (log)").width + 34;
+  c.strokeStyle = cur; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(lgX, yI0 - 12); c.lineTo(lgX + 16, yI0 - 12); c.stroke();
+  c.textAlign = "left"; c.fillText("total", lgX + 21, yI0 - 8);
+  const lg2 = lgX + 21 + c.measureText("total").width + 14;
+  c.fillStyle = cur; c.globalAlpha = 0.3; c.fillRect(lg2, yI0 - 17, 16, 10); c.globalAlpha = 1;
+  c.fillStyle = muted; c.fillText("radio", lg2 + 21, yI0 - 8);
+
+  // Thresholds: the supervisor's trip point, and the firmware's ERI and EOL.
+  const ref = (v, color, dash, label, above) => {
+    if (v < vLo || v > vHi) return;
+    const y = Math.round(YV(v)) + 0.5;
+    c.strokeStyle = color; c.lineWidth = 1; c.setLineDash(dash);
+    c.beginPath(); c.moveTo(left, y); c.lineTo(pw - right, y); c.stroke(); c.setLineDash([]);
+    c.fillStyle = muted; c.textAlign = "right";
+    c.fillText(label, pw - right - 4, above ? y - 4 : y + 12);
+  };
+  ref(probe.eri, warn, [5, 4], `ERI ${probe.eri.toFixed(2)} V`, true);
+  ref(probe.vit, bad, [], `supervisor trips ${probe.vit.toFixed(3)} V`, true);
+  ref(probe.eol, bad, [2, 3], `EOL ${probe.eol.toFixed(2)} V`, false);
+
+  c.save();
+  c.beginPath(); c.rect(left, 0, pw - left - right, ph); c.clip();
+
+  // Each supervisor reset as it fires: the line under the traces, so the dip
+  // that caused it stays visible; a label that would run into the one before
+  // shortens to its number, or drops.
+  const resets = [];
+  for (let i = 1; i < vis.length; i++)
+    if (vis[i].resets > vis[i - 1].resets) resets.push({x: Math.round(X(vis[i].t)) + 0.5, n: vis[i].resets});
+  c.strokeStyle = bad; c.lineWidth = 1.5; c.globalAlpha = 0.7;
+  for (const r of resets) { c.beginPath(); c.moveTo(r.x, yV0); c.lineTo(r.x, yI0 + hI); c.stroke(); }
+  c.globalAlpha = 1;
+
+  if (vis.length > 1) {
+    // The dips: between the rail at each sample and its lowest since the one before.
+    c.fillStyle = rail; c.globalAlpha = 0.28; c.beginPath();
+    vis.forEach((s, i) => i ? c.lineTo(X(s.t), YV(s.v)) : c.moveTo(X(s.t), YV(s.v)));
+    for (let i = vis.length - 1; i >= 0; i--) c.lineTo(X(vis[i].t), YV(Math.min(vis[i].vmin, vis[i].v)));
+    c.closePath(); c.fill(); c.globalAlpha = 1;
+    c.strokeStyle = rail; c.lineWidth = 1; c.beginPath();
+    vis.forEach((s, i) => i ? c.lineTo(X(s.t), YV(s.vmin)) : c.moveTo(X(s.t), YV(s.vmin)));
+    c.stroke();
+    c.lineWidth = 2; c.beginPath();
+    vis.forEach((s, i) => i ? c.lineTo(X(s.t), YV(s.v)) : c.moveTo(X(s.t), YV(s.v)));
+    c.stroke();
+
+    // The radio's share of the load, then the total.
+    c.fillStyle = cur; c.globalAlpha = 0.3; c.beginPath(); c.moveTo(X(vis[0].t), YI(1));
+    for (const s of vis) c.lineTo(X(s.t), YI(s.radio));
+    c.lineTo(X(vis[vis.length - 1].t), YI(1)); c.closePath(); c.fill(); c.globalAlpha = 1;
+    c.strokeStyle = cur; c.lineWidth = 2; c.beginPath();
+    vis.forEach((s, i) => i ? c.lineTo(X(s.t), YI(s.load)) : c.moveTo(X(s.t), YI(s.load)));
+    c.stroke();
+  }
+
+  c.fillStyle = bad; c.font = "600 11px system-ui, sans-serif";
+  let taken = -Infinity;
+  for (const r of resets) {
+    const label = [`RESET #${r.n}`, `#${r.n}`].find(l => r.x + 4 + c.measureText(l).width + 6 <= pw - right
+      ? r.x + 4 >= taken : r.x - 4 - c.measureText(l).width >= taken);
+    if (!label) continue;
+    const w = c.measureText(label).width, flip = r.x + 4 + w + 6 > pw - right;
+    c.textAlign = flip ? "right" : "left";
+    c.fillText(label, flip ? r.x - 4 : r.x + 4, yV0 + 12);
+    taken = (flip ? r.x : r.x + 4 + w) + 6;
+  }
+  c.restore();
+
+  // Hover: a crosshair on the nearest sample and its readout.
+  const tip = $("tip");
+  if (hoverX == null || hoverX < left || !vis.length) { tip.hidden = true; return; }
+  const th = t0 + (hoverX - left) / (pw - left - right) * windowS;
+  let j = firstAt(th);
+  if (j >= batt.length || (j > 0 && th - batt[j - 1].t < batt[j].t - th)) j--;
+  const s = batt[Math.max(j, 0)];
+  if (!s || s.t < t0 - 1) { tip.hidden = true; return; }
+  const hx = Math.round(X(s.t)) + 0.5;
+  c.strokeStyle = muted; c.lineWidth = 1;
+  c.beginPath(); c.moveTo(hx, yV0); c.lineTo(hx, yI0 + hI); c.stroke();
+  const dot = (y, color) => {
+    c.fillStyle = color; c.strokeStyle = css("--bg"); c.lineWidth = 2;
+    c.beginPath(); c.arc(hx, y, 4, 0, 2 * Math.PI); c.fill(); c.stroke();
+  };
+  dot(YV(s.v), rail); dot(YI(s.load), cur);
+  tip.innerHTML =
+    `guest ${s.t.toFixed(3)} s<br>rail &nbsp;${s.v.toFixed(3)} V<br>low &nbsp;&nbsp;${s.vmin.toFixed(3)} V` +
+    `<br>load &nbsp;${fmtI(s.load)}<br>radio ${fmtI(s.radio)}<br>pace &nbsp;${fmtI(s.pacing)}` +
+    `<br>${s.reset_low ? "RESET held low" : "running"} · ${s.resets} resets`;
+  tip.hidden = false;
+  const tw = tip.offsetWidth;
+  tip.style.left = `${hx + 12 + tw > pw ? hx - 12 - tw : hx + 12}px`;
+  tip.style.top = `${yV0 + 4}px`;
+}
+
+for (const b of document.querySelectorAll(".seg button")) {
+  b.addEventListener("click", () => {
+    windowS = +b.dataset.win;
+    for (const o of document.querySelectorAll(".seg button")) o.setAttribute("aria-pressed", o === b);
+  });
+}
+$("pstrip").addEventListener("pointermove", e => { hoverX = e.offsetX; });
+$("pstrip").addEventListener("pointerleave", () => { hoverX = null; });
+
+function frameLoop() {
+  drawProbe();
+  requestAnimationFrame(frameLoop);
+}
+
+function connect() {
+  const es = new EventSource("/events?events=probe,battery");
+  es.addEventListener("probe", e => {
+    probe = JSON.parse(e.data);
+    $("status").textContent = `bench probe, ${probe.hz} samples/s`;
+  });
+  es.addEventListener("battery", e => {
+    if (!probe) return;
+    const s = JSON.parse(e.data);
+    addBattery(s); showBattery(s);
+  });
+  es.addEventListener("battery_backlog", e => {
+    const list = JSON.parse(e.data);
+    if (!probe || !list.length) return;
+    batt = [];
+    for (const s of list) addBattery(s);
+    showBattery(list[list.length - 1]);
+  });
+  es.onopen = () => { $("dot").className = "dot live"; if (probe) $("status").textContent = `bench probe, ${probe.hz} samples/s`; };
+  es.onerror = () => { $("dot").className = "dot down"; $("status").textContent = "no probe — is pacemaker_programmer.py --battery-probe running?"; };
+}
+
+new ResizeObserver(() => { dpr = window.devicePixelRatio || 1; presize(); }).observe($("pstrip"));
+connect();
+requestAnimationFrame(frameLoop);
+</script>
+</body>
+</html>

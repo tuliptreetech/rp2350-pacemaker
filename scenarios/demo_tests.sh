@@ -15,6 +15,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 dest=/tmp/pacemaker-demo-tests-$$
-tar -cf - programmer/pacemaker_programmer.py scenarios/accolade_safety_mode.py scenarios/test_demo_pacemaker.py |
+tar -cf - programmer/pacemaker_programmer.py scenarios/accolade_safety_mode.py scenarios/accolade_communicator.py \
+    scenarios/test_demo_pacemaker.py |
     emerson exec sh -c "mkdir -p $dest && tar -xf - -C $dest"
 emerson exec sh -c "cd $dest && python3 scenarios/test_demo_pacemaker.py \"\$@\"; s=\$?; rm -rf $dest; exit \$s" sh "$@"

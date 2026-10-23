@@ -236,7 +236,7 @@ function frameLoop(t) {
 }
 
 function connect() {
-  const es = new EventSource("/events");
+  const es = new EventSource("/events?events=hello,egm");
   es.addEventListener("hello", e => {
     const h = JSON.parse(e.data);
     sps = h.sps; reset();

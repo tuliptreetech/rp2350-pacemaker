@@ -27,7 +27,7 @@ tree](#moving-from-the-emerson-source-tree) lists what changed.
 | `build.sh`, `Dockerfile.build` | Builds `firmware/firmware.bin` in a Debian container (clang 14, lld, llvm, make), so the host needs no toolchain |
 | `.emerson/peripherals.yaml` | Board wiring: every off-chip part and its pins. `emerson load` mounts it over the image's copy |
 | `programmer/` | Host-side clinic programmer (`pacemaker_programmer.py`), its live-view page and its pytest suite |
-| `scenarios/` | The ACCOLADE reproductions: `accolade_safety_mode.py`, `accolade_v204.py` |
+| `scenarios/` | The ACCOLADE reproductions: `accolade_safety_mode.py`, `accolade_communicator.py`, `accolade_v204.py` |
 | `.claude/skills/` | The `emerson` and `emerson-python` Claude Code skills (rewritten here for emerson 1.0.16 from the `emerson skills pull` versions; a pull overwrites them) |
 
 The emulator project itself (`emerson.yaml`, the boot ROM and the device
@@ -328,12 +328,14 @@ the emerson library only.
 pacemaker_programmer.py                        # interrogate through the wand: summary + pacemaker-interrogation.html
 pacemaker_programmer.py --clear                # interrogate, then clear (end of follow-up)
 pacemaker_programmer.py --live                 # live EGM + markers at http://localhost:8765/
+pacemaker_programmer.py --live --battery-probe # ...and the cell's rail and current at http://localhost:8765/battery
+pacemaker_programmer.py --battery-probe        # the cell alone (/battery): no wand, no telemetry session
 pacemaker_programmer.py --link communicator    # wandless; --await-implant S waits for the implant's own wakeup
 pacemaker_programmer.py --upgrade v2.04|fixed  # move the firmware level, then interrogate
 ```
 
 Other options: `--host`, `--project` (default `rp2350`), `--session TOKEN`,
-`--html PATH`, `--timeout`, `--port` and `--bind`. Run its tests with
+`--html PATH`, `--timeout`, `--port`, `--bind` and `--probe-hz` (default 20). Run its tests with
 `emerson run programmer/test_pacemaker_programmer.py -q`. They import the
 `emerson` module, so they run in the image. In this README,
 `pacemaker_programmer.py` and the scenario scripts are run with `emerson run`;
@@ -346,6 +348,15 @@ harm phase then steps pectoral effort and measures the patient's
 ventricular gaps against what the device logged. `--healthy` runs the same
 period without the defect, and `--control` runs the harm table with bipolar
 sensing. `--no-harm` stops after the latch checks.
+
+**`scenarios/accolade_communicator.py`** is the short form: the same
+defective cell, but the bedside communicator wakes the implant
+(`/patient/communicator start_session`) instead of waiting for the daily
+wakeup. That one connect resets it, the firmware's retries 4 implant hours
+apart reset it twice more, and it latches about 10 guest seconds later. It
+then runs the long form's latch checks, plus the console's `status` line, a
+refused `rate 80` and a wand interrogation. `--healthy` is the control: the
+same connect on a healthy cell reaches a link and resets nothing.
 
 **`scenarios/accolade_v204.py`** compares the firmware levels over implant
 months, fast-forwarding at 800 000× and slowing to 3600× around the
@@ -383,6 +394,7 @@ emerson load firmware/firmware.bin && emerson start && emerson ctl go
 emerson run programmer/pacemaker_programmer.py          # -> ./pacemaker-interrogation.html
 emerson run programmer/test_pacemaker_programmer.py -q  # pytest flags after the file
 emerson run scenarios/accolade_safety_mode.py --no-harm
+emerson run scenarios/accolade_communicator.py           # ~70 s; --healthy ~40 s
 emerson run scenarios/accolade_v204.py --only c
 ```
 
@@ -415,6 +427,45 @@ placed (`emerson ctl action /patient/wand remove_wand` lifts it).
 emerson run -p 8765 programmer/pacemaker_programmer.py --live
 open http://localhost:8765/
 ```
+
+**Battery probe.** `--battery-probe` serves a second page,
+`/battery` (`programmer/battery_view.html`), for a window of its own beside
+the EGM's: the cell's rail voltage and load current, the radio's share of it, and the
+supervisor's resets, against guest time with the supervisor's 2.325 V trip
+point and the firmware's ERI and EOL thresholds. It is a bench probe, not
+telemetry: it reads `/board/battery` and `/board/supervisor` straight from the
+emulator on its own connection, so it keeps reading while the device is held in
+reset, and it shows a current the board has no part to measure. Each sample
+also takes the rail's lowest point since the one before from the cell's
+min-hold (`get_rail`, then `reset_min`), so a sag far shorter than the poll
+interval still shows. The server keeps about five minutes of samples and sends
+them to any page that connects, so a page opened or reloaded late still has
+the history. Each page asks `/events` for only its own events
+(`?events=hello,egm`, `?events=probe,battery`), so the EGM window carries none
+of the probe's traffic.
+
+Both at once, from one process, in two windows:
+
+```
+emerson run -p 8765 programmer/pacemaker_programmer.py --live --battery-probe
+open http://localhost:8765/ http://localhost:8765/battery
+```
+
+Or as two processes, each on its own port: `--live` on 8765, and
+`--battery-probe --port 8766` with `-p 8766`.
+
+Alone, it places no wand, so it can watch the recall without touching it:
+
+```
+emerson run -p 8765 programmer/pacemaker_programmer.py --battery-probe &
+emerson run scenarios/accolade_safety_mode.py --session "$(emerson sessions | awk '/\*/{print $1}')" --no-harm
+open http://localhost:8765/battery
+```
+
+The recall needs `--session` here; without it, it starts a session of its own
+that the probe is not watching. While the probe runs it owns the cell's
+min-hold, so the recall's "rail minimum" at each reset shows only the time
+since the probe's last sample; read the dips from the page instead.
 
 ## Quick checks
 
