@@ -295,7 +295,7 @@ is a firmware download; here every level is already in the image.
 | --- | --- |
 | `base` | As shipped: no battery test. |
 | `v2.04` | Once per implant day, a 3.4 ms TX-burst battery test samples the ADC during the burst and compares the reading with what a healthy cell gives at the same projected longevity. Four tests ≥ 60 mV low raise **Code-1003**. Two tests ≥ 140 mV low **disable wandless telemetry**. Both shipped bugs are present: automatic wakeups still run (bug 1), and a magnet over the device gives a false positive with an explant date of 2000-01-01 (bug 2). |
-| `fixed` | No false positive, and the radio is cut at the load switch when disabled. Upgrading from v2.04 clears an earlier false positive. |
+| `v2.05` | Our model of the corrective update (BSC Brady SMR6). No false positive, and the radio is cut at the load switch when disabled. Upgrading from v2.04 clears an earlier false positive. |
 
 The letter does not describe the mechanism of bug 2, or how bug 1 maps onto
 this radio. The firmware, the scenario output and `notes/stage-6.md` label
@@ -331,7 +331,7 @@ pacemaker_programmer.py --live                 # live EGM + markers at http://lo
 pacemaker_programmer.py --live --battery-probe # ...and the cell's rail and current at http://localhost:8765/battery
 pacemaker_programmer.py --battery-probe        # the cell alone (/battery): no wand, no telemetry session
 pacemaker_programmer.py --link communicator    # wandless; --await-implant S waits for the implant's own wakeup
-pacemaker_programmer.py --upgrade v2.04|fixed  # move the firmware level, then interrogate
+pacemaker_programmer.py --upgrade v2.04|v2.05  # move the firmware level, then interrogate
 ```
 
 Other options: `--host`, `--project` (default `rp2350`), `--session TOKEN`,
@@ -367,7 +367,7 @@ wakeups:
   latch.
 - `c`: fixed, which never resets.
 - `d`: the magnet false positive, and how it plays out with `magnet off`,
-  under fixed, and after upgrading to fixed.
+  under v2.05, and after upgrading to v2.05.
 
 Choose sub-scenarios with `--only a,b,c,d`.
 

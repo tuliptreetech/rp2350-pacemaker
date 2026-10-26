@@ -11,13 +11,15 @@ toward replacement. Four sub-scenarios, each a fresh device and a fresh session,
      before (a)'s latch, then disables wandless telemetry; the NFC wand still works. Shipped bug 1: the
      automatic low-power wakeups are not disabled, so as the impedance keeps climbing they still reset the
      device, and it still latches Safety Mode -- later than (a), or this model says honestly that it does not.
-  c  the FIXED firmware: same trajectory, Code-1003, telemetry off, the radio unpowered: no wakeups, no resets,
+  c  v2.05, the fix: same trajectory, Code-1003, telemetry off, the radio unpowered: no wakeups, no resets,
      no Safety Mode through ~1 year left.
   d  shipped bug 2 (HYPOTHESIS: the letter gives no mechanism): a HEALTHY cell, v2.04, a magnet over the device
      across the daily test -> wandless telemetry disabled and an explant indicator dated 2000-01-01. With
-     `magnet off`: no false positive. On the fixed firmware: none, and an upgrade to it re-enables the radio.
+     `magnet off`: no false positive. On v2.05: none, and an upgrade to it re-enables the radio.
+  e  a device ALREADY in the reset chain: BASE firmware, upgraded to v2.05 through the wand right after its first
+     reset. Does the fix stop the chain, or do the radio's retries latch Safety Mode before the first daily test?
 
-    python3 accolade_v204.py                 # all four (about 25 minutes of wall time)
+    python3 accolade_v204.py                 # all five (about 15 minutes of wall time)
     python3 accolade_v204.py --only a        # one, or a list: --only b,c
     python3 accolade_v204.py --only d
 
@@ -414,8 +416,8 @@ def scenario_c(machine, args):
     run = Run(machine, args.scale)
     out = {"ok": False}
     try:
-        print(f"\n=== (c) FIXED firmware: upgraded at {args.l0} y; Code-1003, telemetry off, radio unpowered ===")
-        new_device(run, args, args.l0, upgrade="fixed")
+        print(f"\n=== (c) v2.05 (the fix): upgraded at {args.l0} y; Code-1003, telemetry off, radio unpowered ===")
+        new_device(run, args, args.l0, upgrade="v2.05")
         run.command("radio wakeup 86400", r"every 86400 implant s")
         fast_forward(run, args, 0.5, stop=lambda: "tele_off" in run.seen)
         if "tele_off" not in run.seen:
@@ -436,14 +438,14 @@ def scenario_c(machine, args):
         draws = run.battery.invoke_action("get_rail", "")
         print("  rail draws:", re.search(r"draws?:? ?(.*?);", draws).group(1) if re.search(r"draws?:? ?(.*?);", draws) else draws[:100])
         run.pump(2.0)
-        print_timeline(run, "(c) fixed")
+        print_timeline(run, "(c) v2.05")
         table(run)
         r = read_retry(run, "wand")
         ok = (not run.latched and run.resets == 0 and run.wakeups == wakes0 and "code1003" in run.seen
               and run.years_left() <= 1.05)
         out.update(ok=ok, resets=run.resets, wakeups=run.wakeups - wakes0, latched=run.latched,
                    years=run.years_left())
-        print(f"\n(c) fixed: {run.resets} resets, {run.wakeups - wakes0} wakeups after the shut-off, latched={run.latched}, "
+        print(f"\n(c) v2.05: {run.resets} resets, {run.wakeups - wakes0} wakeups after the shut-off, latched={run.latched}, "
               f"{run.years_left():.2f} y left; patient: {gaps(run)}  ->  {'PASS' if ok else 'FAIL'}")
         if r:
             show_report(r, "(c) interrogation through the wand")
@@ -481,13 +483,13 @@ def magnet_case(machine, args, name, upgrade, magnet_response, expect_fp):
         run.note("magnet applied over the device across the daily test")
         run.pump(1.0)
         print(f"  Hall switch: {'MAGNET on (the response is in force)' if run.magnet_lines else 'no MAGNET line (response off)'}")
-        got = wait_for_test(run, 1, wall=45.0 if upgrade != "fixed" else 22.0)
+        got = wait_for_test(run, 1, wall=45.0 if upgrade != "v2.05" else 22.0)
         run.pump(1.5)
         fp = "tele_off" in run.seen
         during = len(run.tests)
         magnet.invoke_action("remove_magnet", "")
         run.note(f"magnet removed ({during} daily test(s) ran while it was over the device)")
-        if upgrade == "fixed":
+        if upgrade == "v2.05":
             # No test under a magnet: the test is due, deferred; it runs once the magnet is gone.
             deferred = not got
             got = wait_for_test(run, 1, wall=45.0)
@@ -525,7 +527,7 @@ def scenario_d(conn, args):
           "  check that one was taken. Nothing is wrong with the cell.")
     cases = [("v2.04, magnet response ON, magnet over the device", "v2.04", True, True),
              ("v2.04, `magnet off`, magnet over the device", "v2.04", False, False),
-             ("FIXED, magnet response ON, magnet over the device", "fixed", True, False)]
+             ("v2.05, magnet response ON, magnet over the device", "v2.05", True, False)]
     first = None
     for name, upgrade, resp, expect in cases:
         token = conn.run_project(PROJECT)
@@ -536,10 +538,10 @@ def scenario_d(conn, args):
                 out["ok"] = out["ok"] and res.get("ok", False)
                 if first is None and res.get("fp"):
                     first = res
-                    # the same device, upgraded to the fixed level: the false positive is cleared
+                    # the same device, upgraded to v2.05: the false positive is cleared
                     run = res["run"]
-                    print("\n  the false-positive device, upgraded to the FIXED level (a telemetry request over the wand):")
-                    r = read(run, "wand", upgrade="fixed")
+                    print("\n  the false-positive device, upgraded to v2.05 (a telemetry request over the wand):")
+                    r = read(run, "wand", upgrade="v2.05")
                     run.pump(3.0)
                     fw = r["fw"]
                     try:
@@ -568,17 +570,80 @@ def scenario_d(conn, args):
 
 # --- main ---------------------------------------------------------------------------------------------------
 
+# --- (e) ---------------------------------------------------------------------------------------------------
+
+def scenario_e(machine, args):
+    """A device already in the reset chain: BASE firmware, defective cell, upgraded to v2.05 through the wand
+    right after its first uncommanded reset (the radio is still unpowered then: it comes back at the retry time).
+    PASS if the upgraded device has no further reset and does not latch Safety Mode through --e-hours."""
+    ea = argparse.Namespace(**{**vars(args), "scale": args.e_scale})   # probe and fast_forward return to this scale
+    run = Run(machine, ea.scale)
+    out = {"ok": False}
+    try:
+        print(f"\n=== (e) BASE firmware already resetting, upgraded to v2.05 after its first reset "
+              f"(implant clock {ea.scale}x: the 4-hour retry is {4 * 3600 / ea.scale:.0f} guest s) ===")
+        new_device(run, ea, ea.l0)
+        run.command("radio wakeup 86400", r"every 86400 implant s")
+        level = ea.l0 - 0.3
+        while level >= 0.7 and not run.resets and not run.eri:
+            fast_forward(run, ea, level)
+            resets = probe(run, ea)
+            run.note(f"probe at {run.years_left():.2f} y left: {resets} reset(s)")
+            level -= 0.1
+        if not run.resets:
+            print("FAIL: the base firmware never reset")
+            return out
+        run.mark("reset1", "first uncommanded reset (remote-monitoring wakeup), base firmware", run.last_day)
+
+        # Upgrade at once, before the radio's retry: the clinic reaches the device inside the chain.
+        before = run.resets
+        r = read_retry(run, "wand", tries=2, upgrade="v2.05")
+        if not r or r["fw"]["level"] != pp.FW_FIXED:
+            print("FAIL: the upgrade to v2.05 did not complete")
+            return out
+        during = run.resets - before
+        run.mark("upgraded", "upgraded to v2.05 through the wand", run.last_day)
+        if during:
+            run.note(f"{during} reset(s) during the wand session, before the upgrade took effect")
+        resets0 = run.resets
+
+        start = run.guest_s()
+        span = ea.e_hours * 3600 / ea.scale
+        while run.guest_s() - start < span and not run.latched and not run.eri:
+            run.pump(0.5)
+        run.pump(2.0)   # the boot's reset line follows the latch alarm
+        after = run.resets - resets0
+        print_timeline(run, "(e) base -> v2.05 mid-chain")
+        table(run)
+        ok = after == 0 and not run.latched
+        out.update(ok=ok, before=resets0 - during, during=during, after=after, latched=run.latched,
+                   tele_off="tele_off" in run.seen, code1003="code1003" in run.seen, tests=len(run.tests))
+        print(f"\n(e) {resets0 - during} reset(s) before the upgrade, {during} during it, {after} in the {ea.e_hours} implant "
+              f"hours after it; daily tests run: {len(run.tests)}; telemetry disabled: {'tele_off' in run.seen}; "
+              f"latched={run.latched}; patient: {gaps(run)}  ->  {'PASS' if ok else 'FAIL'}")
+        r = read_retry(run, "wand")
+        if r:
+            show_report(r, "(e) interrogation through the wand")
+        return out
+    finally:
+        run.close()
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--host", default=os.environ.get("EMERSON_HOST", "http://localhost:10314"),
                    help="franklin server (default: EMERSON_HOST, else %(default)s)")
-    p.add_argument("--only", default="a,b,c,d", help="sub-scenarios to run, e.g. a,b (default all)")
+    p.add_argument("--only", default="a,b,c,d,e", help="sub-scenarios to run, e.g. a,b (default all)")
     p.add_argument("--scale", type=int, default=3600, help="implant s per guest s for the 48-hour windows (default %(default)s)")
     p.add_argument("--ff-scale", type=int, default=800000,
                    help="implant s per guest s while the cell ages over months (default %(default)s; a day is 108 ms)")
     p.add_argument("--l0", type=float, default=3.6, help="years of longevity left at the start of a-c (default %(default)s)")
     p.add_argument("--d-years", type=float, default=3.0, help="longevity left of the healthy cell in d (default %(default)s)")
     p.add_argument("--d-scale", type=int, default=14400, help="implant clock for d (a day is 6 guest s; default %(default)s)")
+    p.add_argument("--e-scale", type=int, default=1800,
+                   help="implant clock for e, so the wand upgrade fits before the radio's 4-hour retry (default %(default)s)")
+    p.add_argument("--e-hours", type=float, default=72.0,
+                   help="implant hours e watches the upgraded device for (default %(default)s: the 48-hour window and the first daily tests)")
     p.add_argument("--wall-limit", type=float, default=900.0, help="seconds of wall time per fast-forward (default %(default)s)")
     p.add_argument("--trace", action="store_true", help="print every console and telemetry line that is not a beat marker")
     p.add_argument("--trace-file", default=None, help="write the same lines to this file, quietly")
@@ -602,7 +667,7 @@ def main(argv=None):
                 token = conn.run_project(PROJECT)
                 try:
                     with conn.attach(token) as machine:
-                        fn = {"a": scenario_a, "b": scenario_b, "c": scenario_c}[key]
+                        fn = {"a": scenario_a, "b": scenario_b, "c": scenario_c, "e": scenario_e}[key]
                         results[key] = fn(machine, args)
                 finally:
                     try:
@@ -625,13 +690,18 @@ def main(argv=None):
                  else "bug 1: no latch before ERI" if b.get("eri") else "bug 1: no latch in the probes"))
         ok = ok and b["ok"] and b.get("code1003") and b.get("radio_check")
     if c:
-        print(f"(c) fixed: {c.get('resets')} resets, {c.get('wakeups')} wakeups, latched={c.get('latched')}  ->  {'PASS' if c['ok'] else 'FAIL'}")
+        print(f"(c) v2.05: {c.get('resets')} resets, {c.get('wakeups')} wakeups, latched={c.get('latched')}  ->  {'PASS' if c['ok'] else 'FAIL'}")
         ok = ok and c["ok"]
     if d:
         print("(d) magnet false positive: " + "; ".join(f"{x['name'].split(',')[0]}/{x['name'].split(',')[1].strip()}: fp={x.get('fp')} "
                                                        f"{'PASS' if x.get('ok') else 'FAIL'}" for x in d["cases"])
               + f"; upgrade clears it: {d.get('cleared')}")
         ok = ok and d["ok"]
+    e = results.get("e")
+    if e:
+        print(f"(e) base -> v2.05 mid-chain: {e.get('after')} resets after the upgrade, latched={e.get('latched')}  ->  "
+              f"{'PASS' if e['ok'] else 'FAIL'}")
+        ok = ok and e["ok"]
     ref_day = a["latched_day"] if a and a.get("ok") else args.ref_latch_day
     ref_years = a["latched_years"] if a and a.get("ok") else None
     if b and b.get("code1003_day") is not None and ref_day is not None:

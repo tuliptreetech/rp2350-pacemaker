@@ -183,10 +183,10 @@ BT_REC_FORMAT = "<IHHHHBBH"  # implant_s, v_pre, v_burst, v_exp, l_x100, flags, 
 BT_RECS = 16
 FW_SIZE = 64 + 16 * BT_RECS
 FW_BASE, FW_V204, FW_FIXED = 0, 1, 2
-FW_LEVELS = {FW_BASE: "base", FW_V204: "v2.04", FW_FIXED: "fixed"}
+FW_LEVELS = {FW_BASE: "base", FW_V204: "v2.04", FW_FIXED: "v2.05"}
 FW_LEVEL_NAMES = {FW_BASE: "base (as shipped)", FW_V204: "v2.04 (battery test; with the two shipped bugs)",
-                  FW_FIXED: "fixed (the forthcoming software)"}
-FW_UPGRADE_ARGS = {"v2.04": FW_V204, "fixed": FW_FIXED}
+                  FW_FIXED: "v2.05 (the corrective update, our model of SMR6)"}
+FW_UPGRADE_ARGS = {"v2.04": FW_V204, "v2.05": FW_FIXED}
 FW_F_CODE1003, FW_F_TELE_OFF, FW_F_EXPLANT, FW_F_CLEARED = 1, 2, 4, 8
 DIS_IMPEDANCE, DIS_BAD_SAMPLE = 1, 2
 DISABLE_REASONS = {0: "", DIS_IMPEDANCE: "high battery impedance",
@@ -497,7 +497,7 @@ def unpack_list(fmt, data):
 
 
 def interrogate(session, clear=False, now=None, upgrade=None):
-    """Read everything. `upgrade` ("v2.04" or "fixed", or a level number) first asks the device to move its
+    """Read everything. `upgrade` ("v2.04" or "v2.05", or a level number) first asks the device to move its
     firmware level forward -- the model's stand-in for the clinic's firmware download -- so the report is of
     the upgraded device."""
     now = int(time.time()) if now is None else now
@@ -748,6 +748,13 @@ def live(session, broadcast, now=None, stop=None):
     info = dict(zip([n for n, _ in INFO_FIELDS], struct.unpack_from(INFO_FORMAT, raw_info)))
     if info["proto"] < 2:
         raise RuntimeError(f"the device speaks protocol {info['proto']}; live telemetry needs 2 (firmware 1.1)")
+    # Neither OPEN's answer nor the stream frames say whether Safety Mode has latched: ask once (protocol 4).
+    safety = None
+    if info["proto"] >= MIN_SAFETY_PROTOCOL:
+        [raw] = session.transact([(REQ_SAFETY, b"")])
+        sf = parse_safety(raw)
+        if sf["latched"]:
+            safety = dict(resets=sf["needed"], window_h=sf["window_s"] // 3600)
     gaps = {"last": None, "count": 0}
 
     def on_stream(seq, payload):
@@ -764,7 +771,7 @@ def live(session, broadcast, now=None, stop=None):
     broadcast.send("hello", dict(sps=sps, uv_per_lsb=uv_per_lsb, clock=clock, mode=mode_name(info["mode"]),
                                  rate=info["rate"], utr=info["utr"], pav=info["pav"], sav=info["sav"],
                                  amp_v=info["amp"] / 1000, aamp_v=info["aamp"] / 1000, pw=info["pw"],
-                                 batt_v=info["batt_mv"] / 1000, batt=BATT_STATES[info["batt_state"]]))
+                                 batt_v=info["batt_mv"] / 1000, batt=BATT_STATES[info["batt_state"]], safety=safety))
     next_keepalive = time.monotonic() + STREAM_KEEPALIVE_S
     next_check = time.monotonic() + WAND_CHECK_S
     lifted = False

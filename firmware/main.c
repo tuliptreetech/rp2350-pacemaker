@@ -1743,7 +1743,7 @@ struct safety_block {
 #define BT_RECS 16u
 #define FW_BASE 0u  /* the firmware as shipped: the recall's behaviour */
 #define FW_V204 1u  /* "Model 3869 v2.04": the battery test and the telemetry shut-off, with both shipped bugs */
-#define FW_FIXED 2u /* the forthcoming fix the letter describes */
+#define FW_FIXED 2u /* "v2.05": the corrective update (BSC Brady SMR6, March 2026), modelled from the letter */
 #define FW_F_CODE1003 (1u << 0) /* red alert: voltage too low for projected remaining longevity */
 #define FW_F_TELE_OFF (1u << 1) /* wandless telemetry disabled by the test */
 #define FW_F_EXPLANT (1u << 2)  /* explant indicator reached (ERI, or the false positive) */
@@ -4432,7 +4432,7 @@ static int fw_upgrade(uint32_t level) {
     uart_puts("FIRMWARE level ");
     uart_puts(old == FW_BASE ? "base" : "v2.04");
     uart_puts(" -> ");
-    uart_puts(level == FW_V204 ? "v2.04" : "fixed");
+    uart_puts(level == FW_V204 ? "v2.04" : "v2.05");
     uart_puts(cleared ? "; wandless telemetry re-enabled after a false positive\n" : "\n");
     return 1;
 }
@@ -4681,7 +4681,7 @@ static void run_command(const char *line) {
         return;
     }
     if (starts_with(line, "battest") || starts_with(line, "fw")) {
-        static const char *const LEVELS[] = {"base", "v2.04", "fixed"};
+        static const char *const LEVELS[] = {"base", "v2.04", "v2.05"};
         struct fw_block *fw = &g_store.fw;
         while (*arg == ' ')
             arg++;

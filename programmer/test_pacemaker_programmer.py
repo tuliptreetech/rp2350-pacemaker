@@ -243,6 +243,17 @@ def test_live_streams_frames_then_ends_the_session():
     assert not fake.streaming
 
 
+@pytest.mark.parametrize("latched", [True, False])
+def test_live_says_whether_safety_mode_has_latched(latched):
+    fake = make_fake()
+    fake.info["proto"] = 4
+    fake.store["safety"] = safety_block(latched, [(300_000_000, pp.RESET_SUPERVISOR)] * 3)
+    rec = Recorder(stop_after=1)
+    pp.live(pp.Session(fake, timeout_s=1), rec, now=1_800_000_000, stop=rec.stop)
+    [hello] = [d for e, d in rec.events if e == "hello"]
+    assert hello["safety"] == ({"resets": 3, "window_h": 48} if latched else None)
+
+
 def test_live_refuses_firmware_without_stream():
     fake = make_fake()  # protocol 1
     with pytest.raises(RuntimeError, match="protocol 1"):
@@ -688,7 +699,7 @@ def test_a_real_explant_indicator_carries_its_date_and_is_not_called_erroneous()
 def test_the_fixed_level_reports_the_cleared_false_positive():
     r, _ = interrogate_with_fw(fw_block(level=pp.FW_FIXED, flags=pp.FW_F_CLEARED))
     text = pp.summary_text(r, color=False)
-    assert "Firmware level: fixed (the forthcoming software)" in text
+    assert "Firmware level: v2.05 (the corrective update, our model of SMR6)" in text
     assert "re-enabled after a false positive" in text
     assert text.splitlines()[0].startswith("Device:")  # no alert: nothing is disabled
 
@@ -707,7 +718,7 @@ def test_an_upgrade_is_the_first_request_and_the_report_is_of_the_upgraded_devic
     kinds = [k for w in fake.writes for k, _, _ in pp.parse_frames(w)]
     assert kinds[:2] == [pp.REQ_OPEN, pp.REQ_UPGRADE]
     assert r["fw"]["level"] == pp.FW_V204
-    r, _ = interrogate_with_fw(fw_block(level=pp.FW_V204), upgrade="fixed")
+    r, _ = interrogate_with_fw(fw_block(level=pp.FW_V204), upgrade="v2.05")
     assert r["fw"]["level"] == pp.FW_FIXED
 
 
@@ -722,7 +733,7 @@ def test_the_battery_test_episodes_are_named():
     assert "burst 2.482 V vs 2.598 V expected, projected 3.00 years" in pp.episode_detail(e1)
     e2 = dict(kind=pp.EP_TELE_OFF, a=0, b=2598, c=pp.DIS_BAD_SAMPLE)
     assert "never taken" in pp.episode_detail(e2) and "no burst reading" in pp.episode_detail(e2)
-    assert "v2.04 -> fixed; wandless telemetry re-enabled" in pp.episode_detail(
+    assert "v2.04 -> v2.05; wandless telemetry re-enabled" in pp.episode_detail(
         dict(kind=pp.EP_FW_LEVEL, a=pp.FW_V204, b=pp.FW_FIXED, c=1))
 
 
