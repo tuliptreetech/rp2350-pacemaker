@@ -10,7 +10,7 @@ and stops it at the end, so the session you demo from is never touched, and none
 the repo root, with emerson-server up on firmware/firmware.bin (`emerson load`):
 
     scenarios/demo_tests.sh -q                          # every condition
-    scenarios/demo_tests.sh -q -m "not slow"            # skip rate response and the finale
+    scenarios/demo_tests.sh -q -m "not slow"            # skip rate response
     scenarios/demo_tests.sh -q -s -k magnet             # one, printing what it measured
     scenarios/demo_tests.sh -q --jobs 4                 # 4 groups at once, a session each
 
@@ -501,31 +501,6 @@ def test_rate_response_dddr_walk(dev):
     assert 78 <= sirs[-1] <= 95, "SIR settles in the 80s"
     assert count(ms, "AP") > count(ms, "AS"), "the incompetent sinus node is overtaken: the atrium is paced"
     assert 60000 / median(a_iv) >= 78, "the paced rate climbs to the 80s"
-
-
-# --- Finale ---------------------------------------------------------------------------------------------
-
-@pytest.mark.slow
-def test_finale_accolade_safety_mode_latches():
-    """Steps 1-4 of the finale: defect, resets, the latch, the Safety Mode settings, read back through the wand.
-    The myopotential pauses (step 5) are the script's harm phase: `accolade_safety_mode.py` without --no-harm."""
-    import accolade_safety_mode
-    assert accolade_safety_mode.main(["--no-harm", "--host", HOST]) == 0
-
-
-@pytest.mark.slow
-def test_finale_short_one_communicator_connect_latches():
-    """The finale's short form: one communicator connect on the defective cell resets it, the firmware's
-    retries reset it twice more, and it latches; the same checks, plus the console and the wand."""
-    import accolade_communicator
-    assert accolade_communicator.main(["--host", HOST]) == 0
-
-
-@pytest.mark.slow
-def test_finale_short_healthy_connect_completes():
-    """The short form's control: the same connect on a healthy cell links, and nothing resets."""
-    import accolade_communicator
-    assert accolade_communicator.main(["--healthy", "--host", HOST]) == 0
 
 
 # --- Entry point ----------------------------------------------------------------------------------------

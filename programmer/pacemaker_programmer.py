@@ -813,8 +813,8 @@ def live(session, broadcast, now=None, stop=None):
 # The rail's dips come from the cell's min-hold, which every sample restarts
 # (`reset_min`): a sag far shorter than the poll interval still shows. That
 # min-hold is shared, so while the probe runs, anything else reading it --
-# scenarios/accolade_safety_mode.py's "rail minimum" at each reset -- sees
-# only the time since the probe's last sample.
+# a script reporting the rail minimum at each reset -- sees only the time
+# since the probe's last sample.
 
 BATTERY_PROBE_HZ = 20.0
 # The firmware's thresholds on its loaded VBAT reading (firmware/main.c ERI_MV, EOL_MV).

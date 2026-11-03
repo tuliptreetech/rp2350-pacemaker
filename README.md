@@ -27,7 +27,7 @@ tree](#moving-from-the-emerson-source-tree) lists what changed.
 | `build.sh`, `Dockerfile.build` | Builds `firmware/firmware.bin` in a Debian container (clang 14, lld, llvm, make), so the host needs no toolchain |
 | `.emerson/peripherals.yaml` | Board wiring: every off-chip part and its pins. `emerson load` mounts it over the image's copy |
 | `programmer/` | Host-side clinic programmer (`pacemaker_programmer.py`), its live-view page and its pytest suite |
-| `scenarios/` | The ACCOLADE reproductions: `accolade_safety_mode.py`, `accolade_communicator.py`, `accolade_v204.py` |
+| `scenarios/` | The ACCOLADE tests (`test_safety_mode_quick.py`, `test_v204_prevents_safety_mode.py`, `test_v205_fixes_v204.py`) and the demo's regression suite (`test_demo_pacemaker.py`, run by `demo_tests.sh`) |
 | `.claude/skills/` | The `emerson` and `emerson-python` Claude Code skills (rewritten here for emerson 1.0.16 from the `emerson skills pull` versions; a pull overwrites them) |
 
 The emulator project itself (`emerson.yaml`, the boot ROM and the device
@@ -341,42 +341,30 @@ Other options: `--host`, `--project` (default `rp2350`), `--session TOKEN`,
 `pacemaker_programmer.py` and the scenario scripts are run with `emerson run`;
 see [Running the host tools here](#running-the-host-tools-here).
 
-**`scenarios/accolade_safety_mode.py`** reproduces the recall. A defective
-cell about 2 years from replacement takes automatic radio wakeups at
-3600×. Each one resets the device, and the third latches Safety Mode. The
-harm phase then steps pectoral effort and measures the patient's
-ventricular gaps against what the device logged. `--healthy` runs the same
-period without the defect, and `--control` runs the harm table with bipolar
-sensing. `--no-harm` stops after the latch checks.
+The recall is covered by three pytest files in `scenarios/`. Each test
+starts a session of its own (a new device), runs the implant clock at 3600×
+with the cell aged at the same rate and about 2 years from replacement, and
+stops the session at the end.
 
-**`scenarios/accolade_communicator.py`** is the short form: the same
-defective cell, but the bedside communicator wakes the implant
-(`/patient/communicator start_session`) instead of waiting for the daily
-wakeup. That one connect resets it, the firmware's retries 4 implant hours
-apart reset it twice more, and it latches about 10 guest seconds later. It
-then runs the long form's latch checks, plus the console's `status` line, a
-refused `rate 80` and a wand interrogation. `--healthy` is the control: the
-same connect on a healthy cell reaches a link and resets nothing.
+- **`test_safety_mode_quick.py`** reproduces the recall: the high-impedance
+  defect, then one bedside-communicator wake-up
+  (`/patient/communicator start_session`). The radio's milliamps reset the
+  device, the firmware's retries 4 implant hours apart reset it twice more,
+  and the Safety Mode alarm must report 3 resets within 48 h, VVI 72.5 ppm
+  and unipolar 5.0 V @ 1.0 ms.
+- **`test_v204_prevents_safety_mode.py`** upgrades the device to v2.04
+  through the wand before the defect. Its battery test disables wandless
+  telemetry, and the same communicator wake-up then resets nothing. The
+  device's own nightly wakeups are off, so it checks the communicator path
+  only.
+- **`test_v205_fixes_v204.py`** runs one test on v2.04 and on v2.05, with
+  the nightly wakeups back on after the shut-off. On v2.04 they still run and
+  latch Safety Mode (the shipped bug); on v2.05 the radio is unpowered, and
+  50 implant hours pass with no wakeup and no reset. `-k v2.04` or
+  `-k v2.05` runs one.
 
-**`scenarios/accolade_v204.py`** compares the firmware levels over implant
-months, fast-forwarding at 800 000× and slowing to 3600× around the
-wakeups:
-
-- `a`: base until it latches.
-- `b`: v2.04 from Code-1003 through the telemetry shut-off to the bug-1
-  latch.
-- `c`: fixed, which never resets.
-- `d`: the magnet false positive, and how it plays out with `magnet off`,
-  under v2.05, and after upgrading to v2.05.
-
-Choose sub-scenarios with `--only a,b,c,d`.
-
-Both scripts start their own session unless you pass `--session`, and stop
-it at the end. A session passed in is reset first, which blanks the EEPROM.
-`emerson run` still needs a session of yours to exist (it refuses with none);
-the scenario's own runs beside it. Their windows are paced in guest time
-where that matters, but some waits are still wall seconds tuned on a host
-that ran at 0.5× wall.
+`emerson run` still needs a session of yours to exist (it refuses with
+none); the tests' own sessions run beside it.
 
 ### Running the host tools here
 
@@ -393,25 +381,21 @@ defaults from those, so they need no flags. Run from the repo root. Reports
 emerson load firmware/firmware.bin && emerson start && emerson ctl go
 emerson run programmer/pacemaker_programmer.py          # -> ./pacemaker-interrogation.html
 emerson run programmer/test_pacemaker_programmer.py -q  # pytest flags after the file
-emerson run scenarios/accolade_safety_mode.py --no-harm
-emerson run scenarios/accolade_communicator.py           # ~70 s; --healthy ~40 s
-emerson run scenarios/accolade_v204.py --only c
+emerson run scenarios/test_safety_mode_quick.py -q -s
+emerson run scenarios/test_v204_prevents_safety_mode.py -q -s
+emerson run scenarios/test_v205_fixes_v204.py -q -s
 ```
 
-Verified with `emerson run` on an Apple M3 Max (2026-10-10, emerson 1.0.16,
-image 1.0.16), the two scenarios running in parallel:
+Verified with `emerson run` on an Apple M3 Max:
 
 | Run | Result | Wall time |
 | --- | --- | --- |
-| programmer tests | 50 passed | < 1 s |
+| programmer tests | 52 passed | < 1 s |
 | programmer interrogation (wand) | summary + HTML report | ~10 s |
 | programmer `--live` with `-p 8765` | page and `/events` stream on the host | — |
-| `accolade_safety_mode.py --no-harm` | PASS: reproduced | 110 s |
-| `accolade_v204.py --only c` | every check PASS | 259 s |
-
-The full harm phase (848 s) and all of `accolade_v204.py` (1320 s) were last
-run on 2026-10-08 through an earlier copy-into-the-container wrapper, and
-have not been rerun with `emerson run`.
+| `test_safety_mode_quick.py` (2026-11-03) | 1 passed | ~35 s |
+| `test_v204_prevents_safety_mode.py` (2026-11-03) | 1 passed | ~55 s |
+| `test_v205_fixes_v204.py` (2026-11-03) | 2 passed | ~3 min |
 
 Ctrl+C reaches the script (the container runs with `--init`), so the
 programmer's `finally` lifts the wand and the scenarios stop their sessions.
@@ -454,18 +438,24 @@ open http://localhost:8765/ http://localhost:8765/battery
 Or as two processes, each on its own port: `--live` on 8765, and
 `--battery-probe --port 8766` with `-p 8766`.
 
-Alone, it places no wand, so it can watch the recall without touching it:
+Alone, it places no wand, so it can watch the recall on your session
+without touching it:
 
 ```
 emerson run -p 8765 programmer/pacemaker_programmer.py --battery-probe &
-emerson run scenarios/accolade_safety_mode.py --session "$(emerson sessions | awk '/\*/{print $1}')" --no-harm
 open http://localhost:8765/battery
+emerson ctl broker tty0 $'timescale 3600\r'
+emerson ctl action /board/battery set_aging_factor 3600
+emerson ctl action /board/battery set_depletion 86.5
+# wait ~5 s: the time scale reaches the EEPROM before anything resets
+emerson ctl action /board/battery set_defect 1
+emerson ctl action /patient/communicator start_session
 ```
 
-The recall needs `--session` here; without it, it starts a session of its own
-that the probe is not watching. While the probe runs it owns the cell's
-min-hold, so the recall's "rail minimum" at each reset shows only the time
-since the probe's last sample; read the dips from the page instead.
+The tests in `scenarios/` start sessions of their own, which the probe is
+not watching. While the probe runs it owns the cell's min-hold, so anything
+else reading the rail minimum sees only the time since the probe's last
+sample; read the dips from the page instead.
 
 ## Quick checks
 
@@ -564,7 +554,3 @@ What had to change to run on the packaged `emerson` tool, and why:
   its session with `emerson.attach_session()`.
 - **Host tools run with `emerson run`**, in a container from the server's
   image. The live view binds `EMERSON_BIND_HOST` so `-p` can reach it.
-- **Wall-clock timing.** `accolade_safety_mode.py`'s post-latch checks used
-  wall-second windows, sized for an emulator at 0.5× wall. At 0.23× wall the
-  pocket-stimulation check saw only one pace in its 5 s window and failed. Those
-  checks now wait for guest time (`wait_guest`).
