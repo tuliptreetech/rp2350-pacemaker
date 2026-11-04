@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""The ACCOLADE recall in one short test: a defective battery, one radio session, Safety Mode.
+"""The ACCOLADE recall in one short test: one radio session on a defective battery must not latch
+Safety Mode. On the base firmware it does, so this test fails.
 
 A new session of the project, the implant clock slowed to 3600x (48 implant hours in 48 guest
 seconds), the cell ~2 years from replacement with the high-impedance defect, then one bedside
 communicator wake-up. The radio's milliamps sag the rail below the supervisor's 2.325 V, the chip
 resets, the firmware retries the session, and the third reset within 48 hours latches Safety Mode.
+The test watches the 48-hour window plus one retry interval and fails on the Safety Mode alarm.
 
     emerson run scenarios/test_safety_mode_quick.py -q -s
 
@@ -24,6 +26,7 @@ emerson = pytest.importorskip("emerson")
 HOST = os.environ.get("EMERSON_HOST", "http://localhost:10314")
 PROJECT = os.environ.get("EMERSON_PROJECT", "rp2350")
 SCALE = 3600  # implant seconds per guest second
+WATCH_S = 52  # guest seconds: the 48-hour window plus one 4-hour retry
 
 
 def guest_s(battery):
@@ -54,7 +57,7 @@ def machine():
                 pass
 
 
-def test_one_radio_session_on_a_defective_battery_latches_safety_mode(machine):
+def test_one_radio_session_on_a_defective_battery_does_not_latch_safety_mode(machine):
     tty1 = machine.subscribe_broker("tty1")  # telemetry: the marker channel and the alarms
     try:
         out = bytearray()
@@ -73,13 +76,17 @@ def test_one_radio_session_on_a_defective_battery_latches_safety_mode(machine):
         print("\n" + battery.invoke_action("set_defect", "1").split(";")[1].strip())  # R_int ~14 -> ~263 ohm
         machine.get_device("/patient/communicator").invoke_action("start_session", "")
 
-        assert wait_for(tty1, b"ALARM: SAFETY MODE", out, 180), "no Safety Mode alarm"
-        alarm = next(x for x in out.decode(errors="replace").splitlines() if x.startswith("ALARM: SAFETY MODE"))
-        print(alarm.split(" Permanent")[0])
-        assert "after 3 system resets within 48 h" in alarm
-        assert "VVI 72.5 ppm" in alarm and "unipolar 5.0 V @ 1.0 ms" in alarm
+        start = guest_s(battery)
+        deadline = time.monotonic() + 180
+        while b"ALARM: SAFETY MODE" not in out and guest_s(battery) - start < WATCH_S:
+            assert time.monotonic() < deadline, "the guest clock stalled"
+            out += tty1.read(timeout=0.2) or b""
         resets = int(re.search(r"(\d+) resets", machine.get_device("/board/supervisor").invoke_action("get_status", "")).group(1))
-        assert resets >= 3, f"the supervisor counts {resets} resets"
+        print(f"supervisor resets: {resets}")
+        if b"ALARM: SAFETY MODE" in out:
+            alarm = next(x for x in out.decode(errors="replace").splitlines() if x.startswith("ALARM: SAFETY MODE"))
+            pytest.fail(f"one radio session on a defective battery latched Safety Mode after {resets} supervisor resets: {alarm.split(' Permanent')[0]}",
+                        pytrace=False)
     finally:
         tty1.close()
 

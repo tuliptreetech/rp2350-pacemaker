@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """v2.05 against v2.04's bug: after the battery test disables wandless telemetry, the device's own
-nightly wakeups still run on v2.04 and reset it into Safety Mode; on v2.05 the radio is unpowered.
+nightly wakeups must not reset it into Safety Mode. On v2.04 they do, so that case fails; on v2.05 the
+radio is unpowered, and it passes.
 
 One test, run on both levels. A new device is upgraded through the wand while its battery is healthy;
 then the cell gets the high-impedance defect, the daily battery test (run now with `battest now`)
 disables wandless telemetry, and the nightly check-ins go back on (`radio wakeup 86400`: once a day,
 24 guest seconds at 3600x).
-  - v2.04: the next nightly wakeup still loads the cell, the chip resets, the retries reset it again,
-    and Safety Mode latches (BSC letter, Sept 2025: wakeups "not disabled as intended").
+  - v2.04 (fails): the next nightly wakeup still loads the cell, the chip resets, the retries reset it
+    again, and Safety Mode latches (BSC letter, Sept 2025: wakeups "not disabled as intended").
   - v2.05: the test opened the radio's load switch; for 50 implant hours (two nightly check-ins and
     the whole 48-hour window) there is no wakeup and no reset.
 
@@ -110,16 +111,15 @@ def test_nightly_wakeups_after_the_telemetry_shutoff(machine, level):
         latched = b"ALARM: SAFETY MODE" in after
         print(f"nightly wakeups {wakeups}, supervisor resets {resets}, Safety Mode {'LATCHED' if latched else 'no'}")
 
-        if level == "v2.04":
-            # The bug: telemetry is "disabled", but the nightly wakeup still loads the cell.
-            assert wakeups >= 1 and resets >= 3 and latched
-        else:
+        # Telemetry is disabled, so nothing may wake the radio. On v2.04 the nightly wakeup still loads the cell.
+        assert wakeups == 0 and resets == 0 and not latched, \
+            f"Safety Mode latched after {wakeups} nightly wakeups and {resets} supervisor resets"
+        if level == "v2.05":
             # The fix: the radio is unpowered, so there is nothing left to wake.
             switch = machine.get_device("/board/radio_vsup").invoke_action("get_status", "")
             print("radio load switch:", switch.split(";")[0])
             assert b"radio unpowered, no wakeups of any kind" in out
             assert "ON low" in switch
-            assert wakeups == 0 and resets == 0 and not latched
     finally:
         tty1.close()
 

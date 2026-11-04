@@ -346,22 +346,23 @@ starts a session of its own (a new device), runs the implant clock at 3600×
 with the cell aged at the same rate and about 2 years from replacement, and
 stops the session at the end.
 
-- **`test_safety_mode_quick.py`** reproduces the recall: the high-impedance
-  defect, then one bedside-communicator wake-up
-  (`/patient/communicator start_session`). The radio's milliamps reset the
-  device, the firmware's retries 4 implant hours apart reset it twice more,
-  and the Safety Mode alarm must report 3 resets within 48 h, VVI 72.5 ppm
-  and unipolar 5.0 V @ 1.0 ms.
+- **`test_safety_mode_quick.py`** reproduces the recall, and fails on
+  purpose: the high-impedance defect, then one bedside-communicator wake-up
+  (`/patient/communicator start_session`), and the device must not latch
+  Safety Mode in the next 52 implant hours. On the base firmware the radio's
+  milliamps reset the device, the firmware's retries 4 implant hours apart
+  reset it twice more, and the test fails on the Safety Mode alarm (3 resets
+  within 48 h, VVI 72.5 ppm, unipolar 5.0 V @ 1.0 ms).
 - **`test_v204_prevents_safety_mode.py`** upgrades the device to v2.04
   through the wand before the defect. Its battery test disables wandless
   telemetry, and the same communicator wake-up then resets nothing. The
   device's own nightly wakeups are off, so it checks the communicator path
   only.
 - **`test_v205_fixes_v204.py`** runs one test on v2.04 and on v2.05, with
-  the nightly wakeups back on after the shut-off. On v2.04 they still run and
-  latch Safety Mode (the shipped bug); on v2.05 the radio is unpowered, and
-  50 implant hours pass with no wakeup and no reset. `-k v2.04` or
-  `-k v2.05` runs one.
+  the nightly wakeups back on after the shut-off, and requires 50 implant
+  hours with no wakeup, no reset and no Safety Mode. On v2.04 they still run
+  and latch Safety Mode, so that case fails (the shipped bug); on v2.05 the
+  radio is unpowered, and it passes. `-k v2.04` or `-k v2.05` runs one.
 
 `emerson run` still needs a session of yours to exist (it refuses with
 none); the tests' own sessions run beside it.
@@ -393,9 +394,9 @@ Verified with `emerson run` on an Apple M3 Max:
 | programmer tests | 52 passed | < 1 s |
 | programmer interrogation (wand) | summary + HTML report | ~10 s |
 | programmer `--live` with `-p 8765` | page and `/events` stream on the host | — |
-| `test_safety_mode_quick.py` (2026-11-03) | 1 passed | ~35 s |
+| `test_safety_mode_quick.py` (2026-11-04) | 1 failed (expected: Safety Mode latched) | ~35 s |
 | `test_v204_prevents_safety_mode.py` (2026-11-03) | 1 passed | ~55 s |
-| `test_v205_fixes_v204.py` (2026-11-03) | 2 passed | ~3 min |
+| `test_v205_fixes_v204.py` (2026-11-03, before v2.04 was made to fail) | 2 passed | ~3 min |
 
 Ctrl+C reaches the script (the container runs with `--init`), so the
 programmer's `finally` lifts the wand and the scenarios stop their sessions.
