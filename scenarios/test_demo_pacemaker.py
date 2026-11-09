@@ -13,12 +13,19 @@ the repo root, with emerson-server up on firmware/firmware.bin (`emerson load`):
     scenarios/demo_tests.sh -q -m "not slow"            # skip rate response
     scenarios/demo_tests.sh -q -s -k magnet             # one, printing what it measured
     scenarios/demo_tests.sh -q --jobs 4                 # 4 groups at once, a session each
+    scenarios/demo_tests.sh -q --fw base,v2.05          # every condition on both firmware levels
 
 demo_tests.sh copies the scripts into the server container and runs them there with `emerson exec`.
 `emerson run scenarios/test_demo_pacemaker.py ...` works as well, but only while a session of yours exists.
 
 `--jobs N` splits the selected tests into N groups and runs each in its own pytest process; it is this
 script's option, not pytest-xdist's `-n`.
+
+`--fw LEVELS` (comma-separated: base, v2.04, v2.05; default base) runs every selected test once per firmware
+level. For an upgraded level the clinic upgrades the new device through the wand right after it boots,
+before the condition is set up, so the same checks show the upgrade leaves normal pacing alone. Each
+test's id names its level, `test_1_normal_sinus_rhythm_fully_inhibited[v2.05]`. With `--fw`, every level
+runs with the implant clock at 3600x (see FW_TIMESCALE).
 
 Windows are guest (heart) time, not wall time: the emulator runs at ~0.23x wall on Apple Silicon.
 """
@@ -41,6 +48,12 @@ import pacemaker_programmer as pp  # noqa: E402
 emerson = pytest.importorskip("emerson")
 
 HOST = os.environ.get("EMERSON_HOST", "http://localhost:10314")
+# Set by `--fw` (see main); an environment variable so that --jobs's pytest processes inherit it.
+FW_LEVELS = [x.strip() for x in os.environ.get("PACEMAKER_FW", "base").split(",") if x.strip()]
+# With `--fw`, every level runs with the implant clock at 3600x (an implant day is 24 guest s). At the default
+# 1e6x a day is 86 ms, so an upgraded device's daily battery test, which holds the main loop for up to
+# 40 ms, would come due ten times a second and push paces late. Base gets the same clock, like for like.
+FW_TIMESCALE = 3600 if "PACEMAKER_FW" in os.environ else None
 MARKER = re.compile(r"^(AS|AP|AR|VS|VP|VR) t=([0-9.]+)(?: AV=(\d+) ms)?(?: interval=(\d+) ms)?")
 HEART_V = re.compile(r"ventricle lead (\w+) \(\d+ ohm\), threshold ([0-9.]+) V @ [0-9.]+ ms, last pulse [^,]+, "
                      r"paced (\d+) captured / (\d+) not")
@@ -157,13 +170,14 @@ class Device:
     def capacitor_v(self):
         return float(re.search(r"output capacitor ([0-9.]+) V", self.vpace.invoke_action("get_status", "")).group(1))
 
-    def interrogate(self, tries=3):
-        """A follow-up through the wand, as the clinic programmer does it."""
+    def interrogate(self, tries=3, upgrade=None):
+        """A follow-up through the wand, as the clinic programmer does it; `upgrade` ("v2.04" or "v2.05")
+        first moves the firmware level forward."""
         err = None
         for _ in range(tries):
             link = pp.WandLink(self.m)
             try:
-                return pp.interrogate(pp.Session(link, timeout_s=30))
+                return pp.interrogate(pp.Session(link, timeout_s=30), upgrade=upgrade)
             except (RuntimeError, TimeoutError) as e:
                 err = e
             finally:
@@ -204,9 +218,12 @@ def conn():
         yield c
 
 
-@pytest.fixture
-def dev(conn):
-    """A fresh device and patient: DDD at power-on defaults, sinus 70 bpm, normal conduction."""
+@pytest.fixture(params=FW_LEVELS)
+def dev(conn, request):
+    """A fresh device and patient: DDD at power-on defaults, sinus 70 bpm, normal conduction, on the
+    firmware level the test is parametrized with (an upgraded level is installed through the wand)."""
+    level = request.param
+    assert level in ("base", "v2.04", "v2.05"), f"unknown firmware level {level!r} (base, v2.04 or v2.05)"
     token = conn.run_project(pp.DEFAULT_PROJECT)
     try:
         with conn.attach(token) as machine:
@@ -214,6 +231,12 @@ def dev(conn):
             try:
                 machine.go()
                 d.boot()
+                if FW_TIMESCALE:
+                    d.type(f"timescale {FW_TIMESCALE}")
+                if level != "base":
+                    report = d.interrogate(upgrade=level)
+                    assert pp.FW_LEVELS.get(report["fw"]["level"]) == level, f"the upgrade to {level} did not take"
+                    d.wait_guest(2.0)  # the rhythm settles again after the wand session
                 yield d
             finally:
                 d.close()
@@ -571,8 +594,8 @@ def run_parallel(jobs, args):
 
 
 def main(argv):
-    """`--jobs N` (or `-j N`) runs the selected tests in N parallel groups; every other argument goes to
-    pytest as it is."""
+    """`--jobs N` (or `-j N`) runs the selected tests in N parallel groups, and `--fw LEVELS` on those
+    firmware levels; every other argument goes to pytest as it is."""
     jobs, args = 1, []
     it = iter(argv)
     for a in it:
@@ -580,6 +603,10 @@ def main(argv):
             jobs = int(next(it))
         elif a.startswith("--jobs="):
             jobs = int(a.split("=", 1)[1])
+        elif a == "--fw":
+            os.environ["PACEMAKER_FW"] = next(it)
+        elif a.startswith("--fw="):
+            os.environ["PACEMAKER_FW"] = a.split("=", 1)[1]
         else:
             args.append(a)
     if jobs > 1:
